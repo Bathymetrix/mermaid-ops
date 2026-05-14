@@ -10,8 +10,7 @@ behavior should be easy to inspect before running.
 
 ### `servercopy_princeton.zsh`
 
-Bathymetrix(TM) MERMAID operations script for mirroring Princeton RUDICS SFTP
-accounts into a local server directory.
+Mirror Princeton RUDICS SFTP accounts into a local server directory.
 
 By default, it reads credentials from:
 
@@ -39,8 +38,7 @@ Show help:
 
 ### `servercopy_jamstec.zsh`
 
-Bathymetrix(TM) MERMAID operations script for mirroring JAMSTEC RUDICS SFTP
-accounts into a local server directory.
+Mirror JAMSTEC/KOBE RUDICS SFTP accounts into a local server directory.
 
 By default, it reads credentials from:
 
@@ -95,10 +93,3 @@ commas in fields are not supported.
 - `servercopy_jamstec.zsh` does not delete remote files.
 - `servercopy_jamstec.zsh` does not delete local files unless `lftp` replaces an
   older local copy of a file it is downloading.
-
-## Branding
-
-User-facing scripts may identify themselves as Bathymetrix(TM) MERMAID
-operations tools in headers and help output. Keep source headers plain ASCII;
-use the typographic Bathymetrix(TM) mark only in rendered docs or public web
-copy if needed.
