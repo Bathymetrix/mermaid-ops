@@ -37,16 +37,51 @@ Show help:
 ./servercopy_princeton.zsh --help
 ```
 
+### `servercopy_jamstec`
+
+Bathymetrix(TM) MERMAID operations script for mirroring JAMSTEC RUDICS SFTP
+accounts into a local server directory.
+
+By default, it reads credentials from:
+
+```sh
+$MERMAID/passwords/jamstec.csv
+```
+
+and syncs into:
+
+```sh
+$MERMAID/server_jamstec/
+```
+
+Run:
+
+```sh
+./servercopy_jamstec
+```
+
+Show help:
+
+```sh
+./servercopy_jamstec --help
+```
+
 ## Requirements
 
 - `zsh`
 - `lftp`
 - `MERMAID` set in the environment
 - Princeton credentials CSV at `$MERMAID/passwords/princeton.csv`
+- JAMSTEC credentials CSV at `$MERMAID/passwords/jamstec.csv`
 
-The credentials CSV is expected to use the fourth column for the SFTP username
-and the fifth column for the SFTP password. The first two lines are skipped as
-headers. The file is expected to use simple comma-separated fields; quoted
+The Princeton credentials CSV is expected to use the fourth column for the SFTP
+username and the fifth column for the SFTP password. The first two lines are
+skipped as headers.
+
+The JAMSTEC credentials CSV is expected to have no header lines and use one
+`user,pass` pair per line.
+
+Credential files are expected to use simple comma-separated fields; quoted
 commas in fields are not supported.
 
 ## Safety Notes
@@ -57,6 +92,9 @@ commas in fields are not supported.
 - `servercopy_princeton.zsh` does not delete remote files.
 - `servercopy_princeton.zsh` does not delete local files unless `lftp` replaces
   an older local copy of a file it is downloading.
+- `servercopy_jamstec` does not delete remote files.
+- `servercopy_jamstec` does not delete local files unless `lftp` replaces an
+  older local copy of a file it is downloading.
 
 ## Branding
 
