@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 #
-# servercopy_jamstec
+# servercopy_jamstec.zsh
 # Bathymetrix(TM) MERMAID operations
 # https://bathymetrix.com
 #
@@ -13,11 +13,11 @@
 
 usage() {
     cat <<'EOF'
-servercopy_jamstec - Bathymetrix(TM) MERMAID operations
+servercopy_jamstec.zsh - Bathymetrix(TM) MERMAID operations
 https://bathymetrix.com
 
 Usage:
-  ./servercopy_jamstec [--help]
+  ./servercopy_jamstec.zsh [--help]
 
 Requirements:
   - MERMAID must be set in the environment.
@@ -76,12 +76,14 @@ fi
 
 mkdir -p "$server"
 
+typeset -a login_failed_users
+
 while IFS=$'\t' read -r user passwrd; do
     [[ -n "$user" && -n "$passwrd" ]] || continue
 
     printf "Syncing %s:\n" "$user"
 
-    lftp <<EOF
+    if ! lftp <<EOF
 set sftp:auto-confirm yes
 open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
 mirror --verbose --continue --only-newer --parallel=4 \
@@ -96,6 +98,10 @@ mirror --verbose --continue --only-newer --parallel=4 \
     . "$server"
     bye
 EOF
+    then
+        login_failed_users+=("$user")
+        printf "Warning: login failed for %s; continuing.\n" "$user" >&2
+    fi
 done < <(
     awk -F, '
         {
@@ -106,5 +112,10 @@ done < <(
         }
     ' "$credentials_file"
 )
+
+if (( ${#login_failed_users[@]} > 0 )); then
+    printf "\nLogin failures:\n" >&2
+    printf "  %s\n" "${login_failed_users[@]}" >&2
+fi
 
 printf "\nDone: Synced to %s\n" "$server"

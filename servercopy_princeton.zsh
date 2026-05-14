@@ -76,12 +76,14 @@ fi
 
 mkdir -p "$server"
 
+typeset -a login_failed_users
+
 while IFS=$'\t' read -r user passwrd; do
     [[ -n "$user" && -n "$passwrd" ]] || continue
 
     printf "Syncing %s:\n" "$user"
 
-    lftp <<EOF
+    if ! lftp <<EOF
 set sftp:auto-confirm yes
 open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
 mirror --verbose --continue --only-newer --parallel=4 \
@@ -93,6 +95,10 @@ mirror --verbose --continue --only-newer --parallel=4 \
     . "$server"
     bye
 EOF
+    then
+        login_failed_users+=("$user")
+        printf "Warning: login failed for %s; continuing.\n" "$user" >&2
+    fi
 done < <(
     awk -F, '
         NR > 2 {
@@ -103,5 +109,10 @@ done < <(
         }
     ' "$credentials_file"
 )
+
+if (( ${#login_failed_users[@]} > 0 )); then
+    printf "\nLogin failures:\n" >&2
+    printf "  %s\n" "${login_failed_users[@]}" >&2
+fi
 
 printf "\nDone: Synced to %s\n" "$server"

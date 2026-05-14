@@ -37,7 +37,7 @@ Show help:
 ./servercopy_princeton.zsh --help
 ```
 
-### `servercopy_jamstec`
+### `servercopy_jamstec.zsh`
 
 Bathymetrix(TM) MERMAID operations script for mirroring JAMSTEC RUDICS SFTP
 accounts into a local server directory.
@@ -57,13 +57,13 @@ $MERMAID/server_jamstec/
 Run:
 
 ```sh
-./servercopy_jamstec
+./servercopy_jamstec.zsh
 ```
 
 Show help:
 
 ```sh
-./servercopy_jamstec --help
+./servercopy_jamstec.zsh --help
 ```
 
 ## Requirements
@@ -92,8 +92,8 @@ commas in fields are not supported.
 - `servercopy_princeton.zsh` does not delete remote files.
 - `servercopy_princeton.zsh` does not delete local files unless `lftp` replaces
   an older local copy of a file it is downloading.
-- `servercopy_jamstec` does not delete remote files.
-- `servercopy_jamstec` does not delete local files unless `lftp` replaces an
+- `servercopy_jamstec.zsh` does not delete remote files.
+- `servercopy_jamstec.zsh` does not delete local files unless `lftp` replaces an
   older local copy of a file it is downloading.
 
 ## Branding
