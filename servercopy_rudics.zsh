@@ -17,7 +17,7 @@ servercopy_rudics.zsh - Bathymetrix MERMAID operations
 https://bathymetrix.com
 
 Usage:
-  ./servercopy_rudics.zsh [--help]
+  ./servercopy_rudics.zsh [--dry-run] [--help]
 
 Requirements:
   - MERMAID must be set in the environment.
@@ -39,6 +39,9 @@ Notes:
   - Mirrors each account into $MERMAID/servers/<user>/.
   - Appends one UTC run-ledger row per user mirror attempt to:
     $MERMAID/servers/_runs/servercopy_rudics_runs.csv
+  - --dry-run validates local configuration and prints intended mirror
+    operations without contacting remote servers, modifying mirrored content, or
+    appending to the run ledger.
   - lftp mirror recurses into subdirectories by default.
   - This script does not delete remote files.
   - This script does not use lftp --delete.
@@ -53,16 +56,25 @@ utc_now() {
 emulate -L zsh
 set -euo pipefail
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    usage
-    exit 0
-fi
+dry_run=0
 
-if (( $# > 0 )); then
-    printf "Error: unknown argument: %s\n\n" "$1" >&2
-    usage >&2
-    exit 2
-fi
+while (( $# > 0 )); do
+    case "$1" in
+        --dry-run)
+            dry_run=1
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            printf "Error: unknown argument: %s\n\n" "$1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
 
 if [[ -z "${MERMAID:-}" ]]; then
     printf "Error: MERMAID must be set before running this script.\n" >&2
@@ -86,10 +98,29 @@ if [[ ! -r "$credentials_file" ]]; then
     exit 1
 fi
 
-mkdir -p "$server_root" "$runs_dir"
+if ! awk -F, '
+    {
+        gsub(/\r/, "")
+        if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) {
+            next
+        }
+        if (NF != 2 || $1 == "" || $2 == "") {
+            printf "Error: malformed credentials line %d in %s\n", NR, FILENAME > "/dev/stderr"
+            exit 1
+        }
+    }
+' "$credentials_file"; then
+    exit 1
+fi
 
-if [[ ! -s "$runs_ledger" ]]; then
-    printf "user,result,start,end\n" > "$runs_ledger"
+if (( dry_run )); then
+    mkdir -p "$server_root"
+else
+    mkdir -p "$server_root" "$runs_dir"
+
+    if [[ ! -s "$runs_ledger" ]]; then
+        printf "user,result,start,end\n" > "$runs_ledger"
+    fi
 fi
 
 typeset -a failed_users
@@ -99,6 +130,13 @@ while IFS=$'\t' read -r user passwrd; do
 
     server="$server_root/$user"
     run_started_utc="$(utc_now)"
+
+    if (( dry_run )); then
+        printf "[dry-run] user=%s\n" "$user"
+        printf "[dry-run] remote=sftp://%s:%s\n" "$sftp_host" "$sftp_port"
+        printf "[dry-run] destination=%s\n\n" "$server"
+        continue
+    fi
 
     if ! mkdir -p "$server"; then
         failed_users+=("$user")
@@ -137,6 +175,11 @@ done < <(
         }
     ' "$credentials_file"
 )
+
+if (( dry_run )); then
+    printf "Done: dry run completed for %s\n" "$server_root"
+    exit 0
+fi
 
 if (( ${#failed_users[@]} > 0 )); then
     printf "\nFailures:\n" >&2

@@ -36,6 +36,12 @@ Run:
 ./servercopy_rudics.zsh
 ```
 
+Preview intended mirror operations:
+
+```sh
+./servercopy_rudics.zsh --dry-run
+```
+
 Show help:
 
 ```sh
@@ -70,6 +76,11 @@ broad for now: login/authentication failures, DNS failures, connection failures,
 interrupted transfers, permission failures, local filesystem failures, and other
 per-user mirror failures all use `failure`. No fine-grained failure typing is
 implemented yet.
+
+Use `--dry-run` to perform local validation and print the intended user,
+remote endpoint, and destination for each configured account. Dry-run mode does
+not contact remote servers, does not modify mirrored server contents, and does
+not append to `_runs`.
 
 ### `servercopy_princeton.zsh`
 
@@ -163,6 +174,9 @@ commas in fields are not supported.
 - `servercopy_rudics.zsh` appends UTC run-ledger rows to
   `$MERMAID/servers/_runs/servercopy_rudics_runs.csv` and does not rewrite or
   truncate existing ledgers.
+- `servercopy_rudics.zsh --dry-run` prints intended mirror operations without
+  contacting remote servers, modifying mirrored content, or appending to
+  `_runs`.
 - `servercopy_princeton.zsh` does not delete remote files.
 - `servercopy_princeton.zsh` does not delete local files unless `lftp` replaces
   an older local copy of a file it is downloading.
