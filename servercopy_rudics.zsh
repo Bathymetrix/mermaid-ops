@@ -11,13 +11,22 @@
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 21-May-2026
 
+SERVERCOPY_RUDICS_VERSION="0.1.1"
+
 usage() {
     cat <<'EOF'
 servercopy_rudics.zsh - Bathymetrix MERMAID operations
 https://bathymetrix.com
 
 Usage:
-  ./servercopy_rudics.zsh [--check | -n | --dry-run] [-u USERS | --user USERS] [-h | --help]
+  ./servercopy_rudics.zsh [options]
+
+Options:
+  -c, --check        Validate local configuration only
+  -n, --dry-run      Preview remote mirror operations
+  -u, --user USERS   Comma-separated usernames
+  -h, --help         Show help
+  -v, --version      Show script version
 
 Requirements:
   - MERMAID must be set in the environment.
@@ -41,14 +50,14 @@ Notes:
     configured users. USERS is a comma-separated username list.
   - Appends one UTC run-ledger row per user mirror attempt to:
     $MERMAID/servers/_runs/servercopy_rudics_runs.csv
-  - --check validates local configuration and prints intended mirror
+  - -v or --version prints the script version and exits.
+  - -c or --check validates local configuration and prints intended mirror
     operations without contacting remote servers, authenticating, transferring
     files, or appending to the run ledger.
-  - --dry-run contacts and authenticates to RUDICS, then asks lftp to print the
-    mirror operations it would perform without transferring files or appending
-    to the run ledger. --dry-run is not offline. Use --check for offline/local
-    validation.
-  - -n is an alias for --dry-run.
+  - -n or --dry-run contacts and authenticates to RUDICS, then asks lftp to
+    print the mirror operations it would perform without transferring files or
+    appending to the run ledger. --dry-run is not offline. Use --check for
+    offline/local validation.
   - lftp mirror recurses into subdirectories by default.
   - This script does not delete remote files.
   - lftp --delete removes local mirror files that are absent remotely.
@@ -58,6 +67,10 @@ EOF
 
 utc_now() {
     date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+print_version() {
+    printf "servercopy_rudics.zsh %s\n" "$SERVERCOPY_RUDICS_VERSION"
 }
 
 trim_space() {
@@ -115,7 +128,7 @@ user_filter_provided=0
 
 while (( $# > 0 )); do
     case "$1" in
-        --check)
+        -c|--check)
             check_mode=1
             ;;
         -n|--dry-run)
@@ -145,6 +158,10 @@ while (( $# > 0 )); do
             ;;
         -h|--help)
             usage
+            exit 0
+            ;;
+        -v|--version)
+            print_version
             exit 0
             ;;
         *)
@@ -227,7 +244,20 @@ else
     mkdir -p "$server_root" "$runs_dir"
 
     if [[ ! -s "$runs_ledger" ]]; then
-        printf "user,result,start,end\n" > "$runs_ledger"
+        printf "user,result,start,end,ver\n" > "$runs_ledger"
+    else
+        IFS= read -r ledger_header < "$runs_ledger" || ledger_header=""
+        if [[ "$ledger_header" == "user,result,start,end" ]]; then
+            ledger_tmp="${runs_ledger}.tmp.$$"
+            {
+                printf "user,result,start,end,ver\n"
+                tail -n +2 "$runs_ledger"
+            } > "$ledger_tmp"
+            mv "$ledger_tmp" "$runs_ledger"
+        elif [[ "$ledger_header" != "user,result,start,end,ver" ]]; then
+            printf "Error: unexpected run ledger header in %s\n" "$runs_ledger" >&2
+            exit 1
+        fi
     fi
 fi
 
@@ -282,7 +312,7 @@ EOF
 
     if ! mkdir -p "$server"; then
         record_failure "$user" "could not create destination directory: $server"
-        printf "%s,failure,%s,\n" "$user" "$run_started_utc" >> "$runs_ledger"
+        printf "%s,failure,%s,,%s\n" "$user" "$run_started_utc" "$SERVERCOPY_RUDICS_VERSION" >> "$runs_ledger"
         continue
     fi
 
@@ -298,10 +328,10 @@ EOF
     )"; then
         append_lftp_output "$lftp_output"
         run_finished_utc="$(utc_now)"
-        printf "%s,success,%s,%s\n" "$user" "$run_started_utc" "$run_finished_utc" >> "$runs_ledger"
+        printf "%s,success,%s,%s,%s\n" "$user" "$run_started_utc" "$run_finished_utc" "$SERVERCOPY_RUDICS_VERSION" >> "$runs_ledger"
     else
         record_failure "$user" "$lftp_output"
-        printf "%s,failure,%s,\n" "$user" "$run_started_utc" >> "$runs_ledger"
+        printf "%s,failure,%s,,%s\n" "$user" "$run_started_utc" "$SERVERCOPY_RUDICS_VERSION" >> "$runs_ledger"
     fi
 done < <(
     awk -F, '

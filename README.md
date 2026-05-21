@@ -40,12 +40,14 @@ Check local configuration without contacting RUDICS:
 
 ```sh
 ./servercopy_rudics.zsh --check
+./servercopy_rudics.zsh -c
 ```
 
 Preview remote mirror operations through lftp:
 
 ```sh
 ./servercopy_rudics.zsh --dry-run
+./servercopy_rudics.zsh -n
 ```
 
 Process only selected configured users:
@@ -64,18 +66,28 @@ Check selected users without contacting remote servers:
 
 ```sh
 ./servercopy_rudics.zsh --check --user foo,bar
+./servercopy_rudics.zsh -c -u foo,bar
 ```
 
 Preview selected users through lftp:
 
 ```sh
 ./servercopy_rudics.zsh --dry-run --user foo,bar
+./servercopy_rudics.zsh -n -u foo,bar
 ```
 
 Show help:
 
 ```sh
 ./servercopy_rudics.zsh --help
+./servercopy_rudics.zsh -h
+```
+
+Show the script version:
+
+```sh
+./servercopy_rudics.zsh --version
+./servercopy_rudics.zsh -v
 ```
 
 The unified RUDICS workflow is intended to produce canonical, full mirrors. It
@@ -98,8 +110,13 @@ $MERMAID/servers/_runs/servercopy_rudics_runs.csv
 It records one row per user mirror attempt with these columns:
 
 ```csv
-user,result,start,end
+user,result,start,end,ver
 ```
+
+The `ver` column records the current `SERVERCOPY_RUDICS_VERSION` value for each
+appended row. This script-level version is lightweight operational provenance,
+not a package release system. Bump it whenever operational behavior or ledger
+semantics change.
 
 Allowed result values are `success` and `failure`. A `failure` is intentionally
 broad for now: login/authentication failures, DNS failures, connection failures,
@@ -107,17 +124,17 @@ interrupted transfers, permission failures, local filesystem failures, and other
 per-user mirror failures all use `failure`. No fine-grained failure typing is
 implemented yet.
 
-Use `--check` to perform local validation and print the intended user, remote
-endpoint, and destination for each configured account. Check mode does not
-contact remote servers, does not authenticate, does not transfer files, and does
-not append to `_runs`. When combined with `--user`, check output is limited to
-the selected configured users.
+Use `--check` or `-c` to perform local validation and print the intended user,
+remote endpoint, and destination for each configured account. Check mode does
+not contact remote servers, does not authenticate, does not transfer files, and
+does not append to `_runs`. When combined with `--user`, check output is limited
+to the selected configured users.
 
 Use `--dry-run` to contact and authenticate to RUDICS for each selected account
 and let `lftp mirror --dry-run` print the mirror operations it would perform.
 Dry-run mode transfers nothing and does not append to `_runs`. `--dry-run` is
-not offline. Use `--check` for offline/local validation. `-n` is accepted as an
-alias for `--dry-run`.
+not offline. Use `--check` or `-c` for offline/local validation. `-n` is
+accepted as an alias for `--dry-run`.
 
 ## Requirements
 
@@ -145,12 +162,13 @@ commas in fields are not supported.
 - `servercopy_rudics.zsh` appends UTC run-ledger rows to
   `$MERMAID/servers/_runs/servercopy_rudics_runs.csv` and does not rewrite or
   truncate existing ledgers.
-- `servercopy_rudics.zsh --check` prints intended mirror operations without
-  contacting remote servers, authenticating, transferring files, or appending
-  to `_runs`.
+- `servercopy_rudics.zsh --check` or `servercopy_rudics.zsh -c` prints
+  intended mirror operations without contacting remote servers, authenticating,
+  transferring files, or appending to `_runs`.
 - `servercopy_rudics.zsh --dry-run` contacts and authenticates to RUDICS, asks
   `lftp` to print what it would mirror, transfers nothing, and does not append
-  to `_runs`. `--dry-run` is not offline. Use `--check` for offline/local
-  validation.
-- `servercopy_rudics.zsh --user foo,bar` limits processing to selected
-  configured users only. Non-requested users in the credentials CSV are skipped.
+  to `_runs`. `--dry-run` is not offline. Use `--check` or `-c` for
+  offline/local validation. `-n` is accepted as an alias for `--dry-run`.
+- `servercopy_rudics.zsh --user foo,bar` or `servercopy_rudics.zsh -u foo,bar`
+  limits processing to selected configured users only. Non-requested users in
+  the credentials CSV are skipped.
