@@ -42,6 +42,24 @@ Preview intended mirror operations:
 ./servercopy_rudics.zsh --dry-run
 ```
 
+Process only selected configured users:
+
+```sh
+./servercopy_rudics.zsh --user foo,bar
+./servercopy_rudics.zsh --user=foo,bar
+./servercopy_rudics.zsh -u foo,bar
+```
+
+User filtering accepts a comma-separated list of usernames and trims whitespace
+around names. It only changes which configured users from
+`$MERMAID/passwords/rudics.csv` are processed; it does not filter remote content.
+
+Preview selected users without contacting remote servers:
+
+```sh
+./servercopy_rudics.zsh --dry-run --user foo,bar
+```
+
 Show help:
 
 ```sh
@@ -80,7 +98,8 @@ implemented yet.
 Use `--dry-run` to perform local validation and print the intended user,
 remote endpoint, and destination for each configured account. Dry-run mode does
 not contact remote servers, does not modify mirrored server contents, and does
-not append to `_runs`.
+not append to `_runs`. When combined with `--user`, dry-run output is limited to
+the selected configured users.
 
 ## Requirements
 
@@ -110,3 +129,5 @@ commas in fields are not supported.
 - `servercopy_rudics.zsh --dry-run` prints intended mirror operations without
   contacting remote servers, modifying mirrored content, or appending to
   `_runs`.
+- `servercopy_rudics.zsh --user foo,bar` limits processing to selected
+  configured users only. Non-requested users in the credentials CSV are skipped.
