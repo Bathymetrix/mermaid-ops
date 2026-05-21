@@ -11,7 +11,7 @@
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 21-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.1.2"
+SERVERCOPY_RUDICS_VERSION="0.1.3"
 
 usage() {
     cat <<'EOF'
@@ -118,6 +118,29 @@ record_failure() {
     failure_details[$user]="${clean_detail%$'\n'}"
 }
 
+run_lftp_mirror() {
+    local user="$1"
+    local passwrd="$2"
+    local destination="$3"
+    local preview="$4"
+    local -a mirror_args
+    local mirror_command
+
+    if (( preview )); then
+        mirror_args=("${mirror_options[@]}" --dry-run . "$destination")
+    else
+        mirror_args=("${mirror_options[@]}" . "$destination")
+    fi
+    mirror_command="mirror ${(j: :)${(@q)mirror_args}}"
+
+    lftp 2>&1 <<EOF
+set sftp:auto-confirm yes
+open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
+$mirror_command
+bye
+EOF
+}
+
 emulate -L zsh
 set -euo pipefail
 
@@ -125,7 +148,12 @@ check_mode=0
 dry_run=0
 user_filter=""
 user_filter_provided=0
-mirror_options="--verbose --continue --overwrite --parallel=4"
+mirror_options=(
+    --verbose
+    --continue
+    --overwrite
+    --parallel=4
+)
 
 while (( $# > 0 )); do
     case "$1" in
@@ -285,14 +313,7 @@ while IFS=$'\t' read -r user passwrd; do
         printf "[dry-run] destination=%s\n" "$server"
         printf "[dry-run] lftp mirror preview follows:\n"
 
-        if lftp_output="$(lftp 2>&1 <<EOF
-set sftp:auto-confirm yes
-open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
-mirror $mirror_options --dry-run \
-    . "$server"
-bye
-EOF
-        )"; then
+        if lftp_output="$(run_lftp_mirror "$user" "$passwrd" "$server" 1)"; then
             append_lftp_output "$lftp_output"
         else
             record_failure "$user" "$lftp_output"
@@ -309,14 +330,7 @@ EOF
 
     printf "Syncing %s to %s:\n" "$user" "$server"
 
-    if lftp_output="$(lftp 2>&1 <<EOF
-set sftp:auto-confirm yes
-open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
-mirror $mirror_options \
-    . "$server"
-bye
-EOF
-    )"; then
+    if lftp_output="$(run_lftp_mirror "$user" "$passwrd" "$server" 0)"; then
         append_lftp_output "$lftp_output"
         run_finished_utc="$(utc_now)"
         printf "%s,success,%s,%s,%s\n" "$user" "$run_started_utc" "$run_finished_utc" "$SERVERCOPY_RUDICS_VERSION" >> "$runs_ledger"
