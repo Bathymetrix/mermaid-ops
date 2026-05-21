@@ -82,82 +82,15 @@ remote endpoint, and destination for each configured account. Dry-run mode does
 not contact remote servers, does not modify mirrored server contents, and does
 not append to `_runs`.
 
-### `servercopy_princeton.zsh`
-
-Retained legacy workflow for mirroring Princeton RUDICS SFTP accounts into a
-local server directory.
-
-By default, it reads credentials from:
-
-```sh
-$MERMAID/passwords/princeton.csv
-```
-
-and syncs into:
-
-```sh
-$MERMAID/server_princeton/
-```
-
-Run:
-
-```sh
-./servercopy_princeton.zsh
-```
-
-Show help:
-
-```sh
-./servercopy_princeton.zsh --help
-```
-
-### `servercopy_jamstec.zsh`
-
-Retained legacy workflow for mirroring JAMSTEC/KOBE RUDICS SFTP accounts into a
-local server directory.
-
-By default, it reads credentials from:
-
-```sh
-$MERMAID/passwords/jamstec.csv
-```
-
-and syncs into:
-
-```sh
-$MERMAID/server_jamstec/
-```
-
-Run:
-
-```sh
-./servercopy_jamstec.zsh
-```
-
-Show help:
-
-```sh
-./servercopy_jamstec.zsh --help
-```
-
 ## Requirements
 
 - `zsh`
 - `lftp`
 - `MERMAID` set in the environment
 - Unified RUDICS credentials CSV at `$MERMAID/passwords/rudics.csv`
-- Princeton credentials CSV at `$MERMAID/passwords/princeton.csv`
-- JAMSTEC credentials CSV at `$MERMAID/passwords/jamstec.csv`
 
 The unified RUDICS credentials CSV is expected to have no header row and use one
 `user,pass` pair per line. Blank lines and lines beginning with `#` are skipped.
-
-The Princeton credentials CSV is expected to use the fourth column for the SFTP
-username and the fifth column for the SFTP password. The first two lines are
-skipped as headers.
-
-The JAMSTEC credentials CSV is expected to have no header lines and use one
-`user,pass` pair per line.
 
 Credential files are expected to use simple comma-separated fields; quoted
 commas in fields are not supported.
@@ -177,9 +110,3 @@ commas in fields are not supported.
 - `servercopy_rudics.zsh --dry-run` prints intended mirror operations without
   contacting remote servers, modifying mirrored content, or appending to
   `_runs`.
-- `servercopy_princeton.zsh` does not delete remote files.
-- `servercopy_princeton.zsh` does not delete local files unless `lftp` replaces
-  an older local copy of a file it is downloading.
-- `servercopy_jamstec.zsh` does not delete remote files.
-- `servercopy_jamstec.zsh` does not delete local files unless `lftp` replaces an
-  older local copy of a file it is downloading.
