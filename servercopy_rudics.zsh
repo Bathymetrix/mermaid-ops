@@ -11,7 +11,7 @@
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 21-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.1.3"
+SERVERCOPY_RUDICS_VERSION="0.1.4"
 
 usage() {
     cat <<'EOF'
@@ -23,7 +23,7 @@ Usage:
 
 Options:
   -c, --check        Validate local configuration only
-  -n, --dry-run      Preview remote mirror operations
+  --dry-run          Preview remote mirror operations
   -u, --user USERS   Comma-separated usernames
   -h, --help         Show help
   -v, --version      Show script version
@@ -54,7 +54,7 @@ Notes:
   - -c or --check validates local configuration and prints intended mirror
     operations without contacting remote servers, authenticating, transferring
     files, creating directories or files, or appending to the run ledger.
-  - -n or --dry-run contacts and authenticates to RUDICS, then asks lftp to
+  - --dry-run contacts and authenticates to RUDICS, then asks lftp to
     print the mirror operations it would perform without transferring files or
     modifying local files. It does not append to the run ledger. --dry-run is
     not offline. Use --check for offline/local validation.
@@ -160,7 +160,7 @@ while (( $# > 0 )); do
         -c|--check)
             check_mode=1
             ;;
-        -n|--dry-run)
+        --dry-run)
             dry_run=1
             ;;
         -u|--user)
@@ -262,18 +262,11 @@ fi
 if ! (( check_mode || dry_run )); then
     mkdir -p "$server_root" "$runs_dir"
 
-    if [[ ! -s "$runs_ledger" ]]; then
+    if [[ ! -e "$runs_ledger" ]]; then
         printf "user,result,start,end,ver\n" > "$runs_ledger"
     else
         IFS= read -r ledger_header < "$runs_ledger" || ledger_header=""
-        if [[ "$ledger_header" == "user,result,start,end" ]]; then
-            ledger_tmp="${runs_ledger}.tmp.$$"
-            {
-                printf "user,result,start,end,ver\n"
-                tail -n +2 "$runs_ledger"
-            } > "$ledger_tmp"
-            mv "$ledger_tmp" "$runs_ledger"
-        elif [[ "$ledger_header" != "user,result,start,end,ver" ]]; then
+        if [[ "$ledger_header" != "user,result,start,end,ver" ]]; then
             printf "Error: unexpected run ledger header in %s\n" "$runs_ledger" >&2
             exit 1
         fi
