@@ -17,7 +17,7 @@ servercopy_rudics.zsh - Bathymetrix MERMAID operations
 https://bathymetrix.com
 
 Usage:
-  ./servercopy_rudics.zsh [--dry-run] [--help]
+  ./servercopy_rudics.zsh [-n | --dry-run] [-h | --help]
 
 Requirements:
   - MERMAID must be set in the environment.
@@ -60,10 +60,10 @@ dry_run=0
 
 while (( $# > 0 )); do
     case "$1" in
-        --dry-run)
+        -n|--dry-run)
             dry_run=1
             ;;
-        --help|-h)
+        -h|--help)
             usage
             exit 0
             ;;
