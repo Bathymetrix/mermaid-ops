@@ -67,9 +67,9 @@ Show help:
 ```
 
 The unified RUDICS workflow is intended to produce canonical, full mirrors. It
-does not apply exclude rules, does not prune or filter remote content, and does
-not use `lftp mirror --delete`. It keeps incremental mirror behavior with
-`--continue` and `--only-newer`.
+does not apply exclude rules and does not filter remote content. It uses
+`lftp mirror --delete` to remove local mirror files that are absent remotely,
+and keeps incremental mirror behavior with `--continue`.
 
 The script also maintains an append-only UTC run ledger under:
 
@@ -122,7 +122,8 @@ commas in fields are not supported.
 - `servercopy_rudics.zsh` mirrors each remote account into
   `$MERMAID/servers/<user>/`.
 - `servercopy_rudics.zsh` is a faithful full-mirror workflow. It intentionally
-  has no exclude rules and does not use `lftp mirror --delete`.
+  has no exclude rules and uses `lftp mirror --delete` only to delete local
+  mirror files that are absent remotely.
 - `servercopy_rudics.zsh` appends UTC run-ledger rows to
   `$MERMAID/servers/_runs/servercopy_rudics_runs.csv` and does not rewrite or
   truncate existing ledgers.

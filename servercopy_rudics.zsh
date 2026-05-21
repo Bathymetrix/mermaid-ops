@@ -46,7 +46,7 @@ Notes:
     appending to the run ledger.
   - lftp mirror recurses into subdirectories by default.
   - This script does not delete remote files.
-  - This script does not use lftp --delete.
+  - lftp --delete removes local mirror files that are absent remotely.
   - This script intentionally does not exclude remote content.
 EOF
 }
@@ -252,7 +252,7 @@ while IFS=$'\t' read -r user passwrd; do
     if lftp_output="$(lftp 2>&1 <<EOF
 set sftp:auto-confirm yes
 open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
-mirror --verbose --continue --only-newer --parallel=4 \
+mirror --verbose --continue --overwrite --delete --parallel=4 \
     . "$server"
 bye
 EOF
