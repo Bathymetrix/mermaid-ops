@@ -90,9 +90,9 @@ Show the script version:
 ./servercopy_rudics.zsh -v
 ```
 
-The unified RUDICS workflow is intended to produce canonical, full mirrors. It
-does not apply exclude rules and does not filter remote content. It uses
-`lftp mirror --delete` to remove local mirror files that are absent remotely,
+The unified RUDICS workflow is intended to produce conservative, accumulating
+local mirrors for archival use. It does not apply exclude rules and does not
+filter remote content. It does not delete local files that are absent remotely,
 and keeps incremental mirror behavior with `--continue`.
 
 The script also maintains an append-only UTC run ledger under:
@@ -126,9 +126,9 @@ implemented yet.
 
 Use `--check` or `-c` to perform local validation and print the intended user,
 remote endpoint, and destination for each configured account. Check mode does
-not contact remote servers, does not authenticate, does not transfer files, and
-does not append to `_runs`. When combined with `--user`, check output is limited
-to the selected configured users.
+not contact remote servers, does not authenticate, does not transfer files, does
+not create directories or files, and does not append to `_runs`. When combined
+with `--user`, check output is limited to the selected configured users.
 
 Use `--dry-run` to contact and authenticate to RUDICS for each selected account
 and let `lftp mirror --dry-run` print the mirror operations it would perform.
@@ -156,15 +156,15 @@ commas in fields are not supported.
 - Check destination paths before running a script for the first time.
 - `servercopy_rudics.zsh` mirrors each remote account into
   `$MERMAID/servers/<user>/`.
-- `servercopy_rudics.zsh` is a faithful full-mirror workflow. It intentionally
-  has no exclude rules and uses `lftp mirror --delete` only to delete local
+- `servercopy_rudics.zsh` is a conservative accumulating mirror workflow for
+  archival use. It intentionally has no exclude rules and does not delete local
   mirror files that are absent remotely.
 - `servercopy_rudics.zsh` appends UTC run-ledger rows to
   `$MERMAID/servers/_runs/servercopy_rudics_runs.csv` and does not rewrite or
   truncate existing ledgers.
 - `servercopy_rudics.zsh --check` or `servercopy_rudics.zsh -c` prints
   intended mirror operations without contacting remote servers, authenticating,
-  transferring files, or appending to `_runs`.
+  transferring files, creating directories or files, or appending to `_runs`.
 - `servercopy_rudics.zsh --dry-run` contacts and authenticates to RUDICS, asks
   `lftp` to print what it would mirror, transfers nothing, and does not append
   to `_runs`. `--dry-run` is not offline. Use `--check` or `-c` for

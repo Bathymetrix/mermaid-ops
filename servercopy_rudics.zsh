@@ -11,7 +11,7 @@
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 21-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.1.1"
+SERVERCOPY_RUDICS_VERSION="0.1.2"
 
 usage() {
     cat <<'EOF'
@@ -53,14 +53,14 @@ Notes:
   - -v or --version prints the script version and exits.
   - -c or --check validates local configuration and prints intended mirror
     operations without contacting remote servers, authenticating, transferring
-    files, or appending to the run ledger.
+    files, creating directories or files, or appending to the run ledger.
   - -n or --dry-run contacts and authenticates to RUDICS, then asks lftp to
     print the mirror operations it would perform without transferring files or
-    appending to the run ledger. --dry-run is not offline. Use --check for
-    offline/local validation.
+    modifying local files. It does not append to the run ledger. --dry-run is
+    not offline. Use --check for offline/local validation.
   - lftp mirror recurses into subdirectories by default.
-  - This script does not delete remote files.
-  - lftp --delete removes local mirror files that are absent remotely.
+  - This script does not delete remote or local mirror files.
+  - Remote deletions do not remove local files.
   - This script intentionally does not exclude remote content.
 EOF
 }
@@ -125,6 +125,7 @@ check_mode=0
 dry_run=0
 user_filter=""
 user_filter_provided=0
+mirror_options="--verbose --continue --overwrite --parallel=4"
 
 while (( $# > 0 )); do
     case "$1" in
@@ -143,18 +144,10 @@ while (( $# > 0 )); do
             user_filter="$2"
             user_filter_provided=1
             shift
-            while [[ "$user_filter" == *, && $# > 1 && "$2" != -* ]]; do
-                user_filter="${user_filter}$2"
-                shift
-            done
             ;;
         --user=*)
             user_filter="${1#--user=}"
             user_filter_provided=1
-            while [[ "$user_filter" == *, && $# > 1 && "$2" != -* ]]; do
-                user_filter="${user_filter}$2"
-                shift
-            done
             ;;
         -h|--help)
             usage
@@ -238,9 +231,7 @@ if ! awk -F, '
     exit 1
 fi
 
-if (( check_mode || dry_run )); then
-    mkdir -p "$server_root"
-else
+if ! (( check_mode || dry_run )); then
     mkdir -p "$server_root" "$runs_dir"
 
     if [[ ! -s "$runs_ledger" ]]; then
@@ -297,7 +288,7 @@ while IFS=$'\t' read -r user passwrd; do
         if lftp_output="$(lftp 2>&1 <<EOF
 set sftp:auto-confirm yes
 open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
-mirror --verbose --continue --overwrite --delete --parallel=4 \
+mirror $mirror_options --dry-run \
     . "$server"
 bye
 EOF
@@ -321,7 +312,7 @@ EOF
     if lftp_output="$(lftp 2>&1 <<EOF
 set sftp:auto-confirm yes
 open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
-mirror --verbose --continue --overwrite --delete --parallel=4 \
+mirror $mirror_options \
     . "$server"
 bye
 EOF
