@@ -36,7 +36,13 @@ Run:
 ./servercopy_rudics.zsh
 ```
 
-Preview intended mirror operations:
+Check local configuration without contacting RUDICS:
+
+```sh
+./servercopy_rudics.zsh --check
+```
+
+Preview remote mirror operations through lftp:
 
 ```sh
 ./servercopy_rudics.zsh --dry-run
@@ -54,7 +60,13 @@ User filtering accepts a comma-separated list of usernames and trims whitespace
 around names. It only changes which configured users from
 `$MERMAID/passwords/rudics.csv` are processed; it does not filter remote content.
 
-Preview selected users without contacting remote servers:
+Check selected users without contacting remote servers:
+
+```sh
+./servercopy_rudics.zsh --check --user foo,bar
+```
+
+Preview selected users through lftp:
 
 ```sh
 ./servercopy_rudics.zsh --dry-run --user foo,bar
@@ -95,11 +107,17 @@ interrupted transfers, permission failures, local filesystem failures, and other
 per-user mirror failures all use `failure`. No fine-grained failure typing is
 implemented yet.
 
-Use `--dry-run` to perform local validation and print the intended user,
-remote endpoint, and destination for each configured account. Dry-run mode does
-not contact remote servers, does not modify mirrored server contents, and does
-not append to `_runs`. When combined with `--user`, dry-run output is limited to
+Use `--check` to perform local validation and print the intended user, remote
+endpoint, and destination for each configured account. Check mode does not
+contact remote servers, does not authenticate, does not transfer files, and does
+not append to `_runs`. When combined with `--user`, check output is limited to
 the selected configured users.
+
+Use `--dry-run` to contact and authenticate to RUDICS for each selected account
+and let `lftp mirror --dry-run` print the mirror operations it would perform.
+Dry-run mode transfers nothing and does not append to `_runs`. `--dry-run` is
+not offline. Use `--check` for offline/local validation. `-n` is accepted as an
+alias for `--dry-run`.
 
 ## Requirements
 
@@ -127,8 +145,12 @@ commas in fields are not supported.
 - `servercopy_rudics.zsh` appends UTC run-ledger rows to
   `$MERMAID/servers/_runs/servercopy_rudics_runs.csv` and does not rewrite or
   truncate existing ledgers.
-- `servercopy_rudics.zsh --dry-run` prints intended mirror operations without
-  contacting remote servers, modifying mirrored content, or appending to
-  `_runs`.
+- `servercopy_rudics.zsh --check` prints intended mirror operations without
+  contacting remote servers, authenticating, transferring files, or appending
+  to `_runs`.
+- `servercopy_rudics.zsh --dry-run` contacts and authenticates to RUDICS, asks
+  `lftp` to print what it would mirror, transfers nothing, and does not append
+  to `_runs`. `--dry-run` is not offline. Use `--check` for offline/local
+  validation.
 - `servercopy_rudics.zsh --user foo,bar` limits processing to selected
   configured users only. Non-requested users in the credentials CSV are skipped.

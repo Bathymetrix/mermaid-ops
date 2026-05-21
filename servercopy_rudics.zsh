@@ -17,7 +17,7 @@ servercopy_rudics.zsh - Bathymetrix MERMAID operations
 https://bathymetrix.com
 
 Usage:
-  ./servercopy_rudics.zsh [-n | --dry-run] [-u USERS | --user USERS] [-h | --help]
+  ./servercopy_rudics.zsh [--check | -n | --dry-run] [-u USERS | --user USERS] [-h | --help]
 
 Requirements:
   - MERMAID must be set in the environment.
@@ -41,9 +41,14 @@ Notes:
     configured users. USERS is a comma-separated username list.
   - Appends one UTC run-ledger row per user mirror attempt to:
     $MERMAID/servers/_runs/servercopy_rudics_runs.csv
-  - --dry-run validates local configuration and prints intended mirror
-    operations without contacting remote servers, modifying mirrored content, or
-    appending to the run ledger.
+  - --check validates local configuration and prints intended mirror
+    operations without contacting remote servers, authenticating, transferring
+    files, or appending to the run ledger.
+  - --dry-run contacts and authenticates to RUDICS, then asks lftp to print the
+    mirror operations it would perform without transferring files or appending
+    to the run ledger. --dry-run is not offline. Use --check for offline/local
+    validation.
+  - -n is an alias for --dry-run.
   - lftp mirror recurses into subdirectories by default.
   - This script does not delete remote files.
   - lftp --delete removes local mirror files that are absent remotely.
@@ -103,12 +108,16 @@ record_failure() {
 emulate -L zsh
 set -euo pipefail
 
+check_mode=0
 dry_run=0
 user_filter=""
 user_filter_provided=0
 
 while (( $# > 0 )); do
     case "$1" in
+        --check)
+            check_mode=1
+            ;;
         -n|--dry-run)
             dry_run=1
             ;;
@@ -146,6 +155,11 @@ while (( $# > 0 )); do
     esac
     shift
 done
+
+if (( check_mode && dry_run )); then
+    printf "Error: --check and --dry-run are mutually exclusive.\n" >&2
+    exit 2
+fi
 
 if (( user_filter_provided )) && [[ -z "$user_filter" ]]; then
     printf "Error: --user requires a comma-separated username list.\n" >&2
@@ -207,7 +221,7 @@ if ! awk -F, '
     exit 1
 fi
 
-if (( dry_run )); then
+if (( check_mode || dry_run )); then
     mkdir -p "$server_root"
 else
     mkdir -p "$server_root" "$runs_dir"
@@ -234,10 +248,35 @@ while IFS=$'\t' read -r user passwrd; do
     server="$server_root/$user"
     run_started_utc="$(utc_now)"
 
+    if (( check_mode )); then
+        printf "[check] user=%s\n" "$user"
+        printf "[check] remote=sftp://%s:%s\n" "$sftp_host" "$sftp_port"
+        printf "[check] destination=%s\n\n" "$server"
+        if [[ -e "$server" && ! -d "$server" ]]; then
+            record_failure "$user" "destination exists but is not a directory: $server"
+        fi
+        continue
+    fi
+
     if (( dry_run )); then
         printf "[dry-run] user=%s\n" "$user"
         printf "[dry-run] remote=sftp://%s:%s\n" "$sftp_host" "$sftp_port"
-        printf "[dry-run] destination=%s\n\n" "$server"
+        printf "[dry-run] destination=%s\n" "$server"
+        printf "[dry-run] lftp mirror preview follows:\n"
+
+        if lftp_output="$(lftp 2>&1 <<EOF
+set sftp:auto-confirm yes
+open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
+mirror --verbose --continue --overwrite --delete --parallel=4 \
+    . "$server"
+bye
+EOF
+        )"; then
+            append_lftp_output "$lftp_output"
+        else
+            record_failure "$user" "$lftp_output"
+        fi
+        printf "\n"
         continue
     fi
 
@@ -295,14 +334,6 @@ if (( user_filter_provided )); then
     fi
 fi
 
-if (( dry_run )); then
-    printf "DONE: dry run completed for %s\n" "$server_root"
-    if (( ${#warnings[@]} > 0 )); then
-        printf "%s\n" "${warnings[@]}" >&2
-    fi
-    exit 0
-fi
-
 if (( ${#warnings[@]} > 0 )); then
     printf "%s\n" "${warnings[@]}" >&2
 fi
@@ -319,5 +350,14 @@ if (( ${#failed_users[@]} > 0 )); then
     done
     exit 1
 fi
-printf "\nDONE: synced all accounts to %s\n" "$server_root\n"
+if (( check_mode )); then
+    printf "DONE: local check completed for %s\n" "$server_root"
+    exit 0
+fi
+if (( dry_run )); then
+    printf "\nDONE: dry run completed for %s\n" "$server_root"
+    printf "\n##########################################################\n"
+    exit 0
+fi
+printf "\nDONE: synced all accounts to %s\n" "$server_root"
 printf "\n##########################################################\n"
