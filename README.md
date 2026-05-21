@@ -62,10 +62,10 @@ $MERMAID/servers/_runs/servercopy_rudics_runs.csv
 It records one row per user mirror attempt with these columns:
 
 ```csv
-run_started_utc,user,status,run_finished_utc
+user,result,start,end
 ```
 
-Allowed status values are `success` and `failure`. A `failure` is intentionally
+Allowed result values are `success` and `failure`. A `failure` is intentionally
 broad for now: login/authentication failures, DNS failures, connection failures,
 interrupted transfers, permission failures, local filesystem failures, and other
 per-user mirror failures all use `failure`. No fine-grained failure typing is

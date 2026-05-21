@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 #
 # servercopy_rudics.zsh
-# Bathymetrix MERMAID operations
+# Bathymetrix(TM) MERMAID operations
 # https://bathymetrix.com
 #
 # Mirrors RUDICS SFTP accounts into per-user local server directories.
@@ -88,8 +88,8 @@ fi
 
 mkdir -p "$server_root" "$runs_dir"
 
-if [[ ! -e "$runs_ledger" ]]; then
-    printf "run_started_utc,user,status,run_finished_utc\n" > "$runs_ledger"
+if [[ ! -s "$runs_ledger" ]]; then
+    printf "user,result,start,end\n" > "$runs_ledger"
 fi
 
 typeset -a failed_users
@@ -102,7 +102,7 @@ while IFS=$'\t' read -r user passwrd; do
 
     if ! mkdir -p "$server"; then
         failed_users+=("$user")
-        printf "%s,%s,failure,\n" "$run_started_utc" "$user" >> "$runs_ledger"
+        printf "%s,failure,%s,\n" "$user" "$run_started_utc" >> "$runs_ledger"
         printf "Warning: sync failed for %s; continuing.\n" "$user" >&2
         continue
     fi
@@ -118,11 +118,11 @@ bye
 EOF
     then
         failed_users+=("$user")
-        printf "%s,%s,failure,\n" "$run_started_utc" "$user" >> "$runs_ledger"
+        printf "%s,failure,%s,\n" "$user" "$run_started_utc" >> "$runs_ledger"
         printf "Warning: sync failed for %s; continuing.\n" "$user" >&2
     else
         run_finished_utc="$(utc_now)"
-        printf "%s,%s,success,%s\n" "$run_started_utc" "$user" "$run_finished_utc" >> "$runs_ledger"
+        printf "%s,success,%s,%s\n" "$user" "$run_started_utc" "$run_finished_utc" >> "$runs_ledger"
     fi
 done < <(
     awk -F, '
