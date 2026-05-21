@@ -68,6 +68,38 @@ trim_space() {
     printf "%s" "$value"
 }
 
+append_lftp_output() {
+    local output="$1"
+    local line
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == [Ww]arning:* ]]; then
+            warnings+=("$line")
+        else
+            printf "%s\n" "$line"
+        fi
+    done <<< "$output"
+}
+
+record_failure() {
+    local user="$1"
+    local detail="${2:-}"
+    local line
+    local clean_detail=""
+
+    failed_users+=("$user")
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == [Ww]arning:* ]]; then
+            warnings+=("$line")
+        elif [[ -n "$line" ]]; then
+            clean_detail+="${line}"$'\n'
+        fi
+    done <<< "$detail"
+
+    failure_details[$user]="${clean_detail%$'\n'}"
+}
+
 emulate -L zsh
 set -euo pipefail
 
@@ -186,6 +218,8 @@ else
 fi
 
 typeset -a failed_users
+typeset -a warnings
+typeset -A failure_details
 processed_users=0
 
 while IFS=$'\t' read -r user passwrd; do
@@ -208,28 +242,27 @@ while IFS=$'\t' read -r user passwrd; do
     fi
 
     if ! mkdir -p "$server"; then
-        failed_users+=("$user")
+        record_failure "$user" "could not create destination directory: $server"
         printf "%s,failure,%s,\n" "$user" "$run_started_utc" >> "$runs_ledger"
-        printf "Warning: sync failed for %s; continuing.\n" "$user" >&2
         continue
     fi
 
     printf "Syncing %s to %s:\n" "$user" "$server"
 
-    if ! lftp <<EOF
+    if lftp_output="$(lftp 2>&1 <<EOF
 set sftp:auto-confirm yes
 open -u "$user","$passwrd" "sftp://$sftp_host:$sftp_port"
 mirror --verbose --continue --only-newer --parallel=4 \
     . "$server"
 bye
 EOF
-    then
-        failed_users+=("$user")
-        printf "%s,failure,%s,\n" "$user" "$run_started_utc" >> "$runs_ledger"
-        printf "Warning: sync failed for %s; continuing.\n" "$user" >&2
-    else
+    )"; then
+        append_lftp_output "$lftp_output"
         run_finished_utc="$(utc_now)"
         printf "%s,success,%s,%s\n" "$user" "$run_started_utc" "$run_finished_utc" >> "$runs_ledger"
+    else
+        record_failure "$user" "$lftp_output"
+        printf "%s,failure,%s,\n" "$user" "$run_started_utc" >> "$runs_ledger"
     fi
 done < <(
     awk -F, '
@@ -245,28 +278,46 @@ done < <(
     ' "$credentials_file"
 )
 
+printf "##########################################################\n"
 if (( user_filter_provided )); then
     for requested_user in "${requested_user_order[@]}"; do
         if [[ -z "${seen_requested_users[$requested_user]:-}" ]]; then
-            printf "Warning: requested user not found in credentials file: %s\n" "$requested_user" >&2
+            warnings+=("Warning: requested user not found in credentials file: $requested_user")
         fi
     done
 
     if (( processed_users == 0 )); then
+        if (( ${#warnings[@]} > 0 )); then
+            printf "%s\n" "${warnings[@]}" >&2
+        fi
         printf "Error: no requested users were found in credentials file: %s\n" "$credentials_file" >&2
         exit 1
     fi
 fi
 
 if (( dry_run )); then
-    printf "Done: dry run completed for %s\n" "$server_root"
+    printf "DONE: dry run completed for %s\n" "$server_root"
+    if (( ${#warnings[@]} > 0 )); then
+        printf "%s\n" "${warnings[@]}" >&2
+    fi
     exit 0
+fi
+
+if (( ${#warnings[@]} > 0 )); then
+    printf "%s\n" "${warnings[@]}" >&2
 fi
 
 if (( ${#failed_users[@]} > 0 )); then
     printf "\nFailures:\n" >&2
-    printf "  %s\n" "${failed_users[@]}" >&2
+    for failed_user in "${failed_users[@]}"; do
+        printf "  %s\n" "$failed_user" >&2
+        if [[ -n "${failure_details[$failed_user]:-}" ]]; then
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                printf "    %s\n" "$line" >&2
+            done <<< "${failure_details[$failed_user]}"
+        fi
+    done
     exit 1
 fi
-
-printf "\nDone: Synced all accounts to %s\n" "$server_root"
+printf "\nDONE: synced all accounts to %s\n" "$server_root\n"
+printf "\n##########################################################\n"
