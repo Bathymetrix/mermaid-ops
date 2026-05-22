@@ -144,6 +144,24 @@ broad for now: login/authentication failures, DNS failures, connection failures,
 interrupted transfers, permission failures, local filesystem failures, and other
 per-user mirror failures all use `failure`.
 
+## Transcript logs
+
+Each normal or dry-run invocation writes one raw combined stdout/stderr
+transcript log under:
+
+```sh
+$MERMAID/servers/_runs/
+```
+
+Transcript filenames use the invocation UTC timestamp:
+
+```sh
+servercopy_rudics_<UTC>.log
+```
+
+These logs are raw operational/debug evidence only. They are not parsed or used
+to classify failures. Check mode does not create transcript logs.
+
 ## Check vs dry-run
 
 `--check` / `-c` performs local validation and prints the intended user, remote
@@ -153,12 +171,13 @@ endpoint, and destination for each configured account. Check mode does not:
 - transfer files
 - create directories or files
 - append to `_runs`
+- create transcript logs
 
 When combined with `--user`, output is limited to selected configured users.
 
 `--dry-run` contacts and authenticates to RUDICS for each selected account and
 lets `lftp mirror --dry-run` print the operations it would perform. Dry-run mode
-transfers nothing and does not append to `_runs`.
+transfers nothing, writes a transcript log, and does not append to `_runs`.
 
 `--dry-run` is not offline. Use `--check` or `-c` for offline/local validation.
 

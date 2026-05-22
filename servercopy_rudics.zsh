@@ -13,7 +13,7 @@
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 22-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.3.0"
+SERVERCOPY_RUDICS_VERSION="0.4.0"
 
 usage() {
     cat <<'EOF'
@@ -57,14 +57,18 @@ Notes:
     configured users. USERS is a comma-separated username list.
   - Appends one UTC run-ledger row per user mirror attempt to:
     $MERMAID/servers/_runs/servercopy_rudics_runs.csv
+  - Normal and dry-run invocations write one raw transcript log to:
+    $MERMAID/servers/_runs/servercopy_rudics_<UTC>.log
   - -v or --version prints the script version and exits.
   - -c or --check validates local configuration and prints intended mirror
     operations without contacting remote servers, authenticating, transferring
-    files, creating directories or files, or appending to the run ledger.
+    files, creating directories or files, appending to the run ledger, or
+    creating transcript logs.
   - --dry-run contacts and authenticates to RUDICS, then asks lftp to
     print the mirror operations it would perform without transferring files or
-    modifying local files. It does not append to the run ledger. --dry-run is
-    not offline. Use --check for offline/local validation.
+    modifying local files. It writes a transcript log but does not append to
+    the run ledger. --dry-run is not offline. Use --check for offline/local
+    validation.
   - This script does not delete remote or local mirror files.
   - Remote deletions do not remove local files.
   - Remote Unix permissions are not preserved.
@@ -255,17 +259,23 @@ if [[ -z "${MERMAID:-}" ]]; then
     exit 1
 fi
 
-if ! command -v lftp >/dev/null 2>&1; then
-    printf "Error: lftp is required but was not found on PATH.\n" >&2
-    exit 1
-fi
-
 credentials_file="$MERMAID/passwords/rudics.csv"
 server_root="$MERMAID/servers"
 runs_dir="$server_root/_runs"
 runs_ledger="$runs_dir/servercopy_rudics_runs.csv"
 sftp_host="rudics.thorium.cls.fr"
 sftp_port="${SFTP_PORT:-22}"
+
+if ! (( check_mode )); then
+    mkdir -p "$runs_dir"
+    transcript_log="$runs_dir/servercopy_rudics_$(utc_now).log"
+    exec > >(tee -a "$transcript_log") 2>&1
+fi
+
+if ! command -v lftp >/dev/null 2>&1; then
+    printf "Error: lftp is required but was not found on PATH.\n" >&2
+    exit 1
+fi
 
 case "$sftp_port" in
     ""|*[!0-9]*)
@@ -299,8 +309,6 @@ if ! awk -F, '
 fi
 
 if ! (( check_mode || dry_run )); then
-    mkdir -p "$server_root" "$runs_dir"
-
     if [[ ! -e "$runs_ledger" ]]; then
         printf "user,result,start,end,ver\n" > "$runs_ledger"
     else
