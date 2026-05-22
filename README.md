@@ -119,6 +119,29 @@ Hidden dotfiles and hidden dot-directories are also excluded. Everything else is
 skipped. The workflow does not delete local files that are absent remotely, and
 keeps incremental mirror behavior with `--continue`.
 
+To include another MERMAID artifact file type later, add one quoted glob pattern
+to the `include_patterns` array near the top of `servercopy_rudics.zsh`. For
+example, to include `.ABC` files:
+
+```zsh
+include_patterns=(
+    "*.cmd"
+    "*.out"
+    "*.vit"
+    "*.LOG"
+    "*.BIN"
+    "*.MER"
+    "*.[0-9][0-9][0-9]"
+    "*.S41"
+    "*.S61"
+    "*.RBR"
+    "*.ABC"
+)
+```
+
+After changing the policy, run `./servercopy_rudics.zsh --dry-run` for a remote
+preview before running a normal mirror.
+
 The script also maintains an append-only UTC run ledger under:
 
 ```sh
