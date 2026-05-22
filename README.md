@@ -10,10 +10,10 @@ behavior should be easy to inspect before running.
 
 ### `servercopy_rudics.zsh`
 
-Mirror selected MERMAID artifacts from RUDICS SFTP accounts into per-user local
-server directories. This workflow intentionally mirrors known MERMAID
-artifact/log file types while skipping unrelated directories, hidden dotfiles,
-hidden dot-directories, and other files.
+Mirror accessible content from RUDICS SFTP accounts into per-user local server
+directories. This workflow skips remote `backups/` directories, does not delete
+local files when remote files disappear, and does not preserve remote Unix
+permission bits.
 
 Credentials are read from:
 
@@ -47,7 +47,7 @@ Check local configuration without contacting RUDICS:
 ./servercopy_rudics.zsh -c
 ```
 
-Preview remote artifact mirror operations through `lftp`:
+Preview remote mirror operations through `lftp`:
 
 ```sh
 ./servercopy_rudics.zsh --dry-run
@@ -87,38 +87,22 @@ Show help or version:
 ./servercopy_rudics.zsh -v
 ```
 
-The workflow mirrors only these file patterns, in order:
+The workflow mirrors accessible remote content from each account into:
 
-```text
-*.cmd
-*.out
-*.vit
-*.LOG
-*.BIN
-*.MER
-*.[0-9][0-9][0-9]
-*.S41
-*.S61
-*.RBR
+```sh
+$MERMAID/servers/<user>/
 ```
 
-Excluded directories:
+Excluded remote directories:
 
 ```text
 backups/
-tools/
-lib64/
-logs/
 ```
 
-Hidden dotfiles and hidden dot-directories are also excluded. Everything else is
-skipped. The workflow does not delete local files that are absent remotely and
-keeps incremental mirror behavior with `--continue`. Remote Unix permission bits
-are intentionally not preserved; this is an operational artifact mirror, not a
+The workflow does not delete local files that are absent remotely and keeps
+incremental mirror behavior with `--continue`. Remote Unix permission bits are
+intentionally not preserved; this is an operational mirror, not a
 permission-preserving filesystem archive.
-
-To include another MERMAID artifact file type later, add one quoted glob pattern
-to the `include_patterns` array near the top of `servercopy_rudics.zsh`.
 
 After changing the policy, run:
 
@@ -130,7 +114,7 @@ before running a normal mirror.
 
 ## Run ledger
 
-The script maintains an append-only UTC run ledger under:
+The script maintains a single append-only UTC run ledger under:
 
 ```sh
 $MERMAID/servers/_runs/
@@ -191,7 +175,8 @@ transfers nothing and does not append to `_runs`.
 - Scripts may touch live MERMAID server data.
 - Credentials files should never be committed.
 - Check destination paths before running a script for the first time.
-- `servercopy_rudics.zsh` mirrors selected MERMAID artifacts into
+- `servercopy_rudics.zsh` mirrors accessible remote content into
   `$MERMAID/servers/<user>/`.
+- Remote `backups/` directories are skipped.
 - Remote deletions do not delete local files.
 - The run ledger is append-only and is not rewritten or truncated.
