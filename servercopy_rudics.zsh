@@ -13,7 +13,7 @@
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 21-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.2.2"
+SERVERCOPY_RUDICS_VERSION="0.2.3"
 
 include_patterns=(
     "*.cmd"
@@ -209,6 +209,7 @@ mirror_options=(
     --verbose
     --continue
     --overwrite
+    --no-perms
     --no-empty-dirs
     --parallel=4
 )

@@ -113,7 +113,9 @@ logs/
 
 Hidden dotfiles and hidden dot-directories are also excluded. Everything else is
 skipped. The workflow does not delete local files that are absent remotely and
-keeps incremental mirror behavior with `--continue`.
+keeps incremental mirror behavior with `--continue`. Remote Unix permission bits
+are intentionally not preserved; this is an operational artifact mirror, not a
+permission-preserving filesystem archive.
 
 To include another MERMAID artifact file type later, add one quoted glob pattern
 to the `include_patterns` array near the top of `servercopy_rudics.zsh`.
