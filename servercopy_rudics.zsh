@@ -12,7 +12,7 @@
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 21-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.2.0"
+SERVERCOPY_RUDICS_VERSION="0.2.1"
 
 include_patterns=(
     "*.cmd"
@@ -84,6 +84,7 @@ Notes:
     tools/
     lib64/
     logs/
+  - Hidden dotfiles and hidden dot-directories are excluded.
   - -u USERS, --user USERS, or --user=USERS processes only matching
     configured users. USERS is a comma-separated username list.
   - Appends one UTC run-ledger row per user mirror attempt to:
@@ -108,6 +109,15 @@ utc_now() {
 
 print_version() {
     printf "servercopy_rudics.zsh %s\n" "$SERVERCOPY_RUDICS_VERSION"
+}
+
+lftp_quote_arg() {
+    local value="$1"
+
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+
+    printf '"%s"' "$value"
 }
 
 trim_space() {
@@ -161,6 +171,8 @@ run_lftp_mirror() {
     local destination="$3"
     local preview="$4"
     local -a mirror_args
+    local -a quoted_args
+    local arg
     local mirror_command
 
     if (( preview )); then
@@ -168,7 +180,10 @@ run_lftp_mirror() {
     else
         mirror_args=("${mirror_options[@]}" "${mirror_filter_options[@]}" . "$destination")
     fi
-    mirror_command="mirror ${(j: :)${(@q)mirror_args}}"
+    for arg in "${mirror_args[@]}"; do
+        quoted_args+=("$(lftp_quote_arg "$arg")")
+    done
+    mirror_command="mirror ${(j: :)quoted_args}"
 
     lftp 2>&1 <<EOF
 set sftp:auto-confirm yes
@@ -197,12 +212,18 @@ mirror_filter_options=(
     --include-glob "*/"
 )
 
-# lftp needs an explicit directory include to traverse subdirectories. The
-# catch-all exclude comes first so later artifact includes can override it;
-# directory excludes come after the includes so skipped directories stay skipped.
+# lftp needs an explicit directory include to traverse normal subdirectories.
+# The catch-all exclude comes first so later artifact includes can override it;
+# hidden and named directory excludes come after the includes so they still win.
 for include_pattern in "${include_patterns[@]}"; do
     mirror_filter_options+=(--include-glob "$include_pattern")
 done
+mirror_filter_options+=(
+    --exclude-glob ".*"
+    --exclude-glob ".*/"
+    --exclude-glob "*/.*"
+    --exclude-glob "*/.*/"
+)
 for exclude_directory in "${exclude_directories[@]}"; do
     mirror_filter_options+=(--exclude-glob "$exclude_directory")
     mirror_filter_options+=(--exclude-glob "${exclude_directory}*")

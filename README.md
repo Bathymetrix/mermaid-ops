@@ -13,7 +13,7 @@ behavior should be easy to inspect before running.
 Mirror selected MERMAID artifacts from RUDICS SFTP accounts into per-user local
 server directories. This is the workflow for creating an operational mirror of
 known MERMAID artifact/log file types while intentionally skipping unrelated
-directories and files.
+directories, hidden dotfiles, hidden dot-directories, and other files.
 
 By default, it reads credentials from:
 
@@ -115,8 +115,9 @@ lib64/
 logs/
 ```
 
-Everything else is skipped. The workflow does not delete local files that are
-absent remotely, and keeps incremental mirror behavior with `--continue`.
+Hidden dotfiles and hidden dot-directories are also excluded. Everything else is
+skipped. The workflow does not delete local files that are absent remotely, and
+keeps incremental mirror behavior with `--continue`.
 
 The script also maintains an append-only UTC run ledger under:
 
@@ -179,8 +180,9 @@ commas in fields are not supported.
 - `servercopy_rudics.zsh` mirrors selected MERMAID artifacts from each remote
   account into
   `$MERMAID/servers/<user>/`.
-- `servercopy_rudics.zsh` intentionally skips unrelated remote directories and
-  files. Remote deletions still do not delete local files.
+- `servercopy_rudics.zsh` intentionally skips unrelated remote directories,
+  hidden dotfiles, hidden dot-directories, and other files. Remote deletions
+  still do not delete local files.
 - `servercopy_rudics.zsh` appends UTC run-ledger rows to
   `$MERMAID/servers/_runs/servercopy_rudics_runs.csv` and does not rewrite or
   truncate existing ledgers. The ledger header is `user,result,start,end,ver`.
