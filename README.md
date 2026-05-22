@@ -21,9 +21,15 @@ By default, it reads credentials from:
 $MERMAID/passwords/rudics.csv
 ```
 
-The credentials file has no header row and uses one simple `user,pass` pair per
-line. Blank lines and lines beginning with `#` are skipped. Quoted commas in
-fields are not supported.
+The credentials file is intentionally simple unquoted CSV with no header row and
+one `user,pass` pair per line. Blank lines and lines beginning with `#` are
+skipped. No quoted CSV parsing is supported. Usernames and passwords must not
+contain commas, quotes, backslashes, or whitespace. This is an intentional
+operational simplification.
+
+Usernames from the credentials file are used as a single local path component
+under `$MERMAID/servers/<user>/`. Empty usernames, `.`, `..`, and usernames
+containing `/` are rejected.
 
 Each account syncs into:
 
@@ -165,6 +171,9 @@ appended row. This script-level version is lightweight operational provenance,
 not a package release system. Bump it whenever operational behavior or ledger
 semantics change.
 
+Successful rows populate `end` with the UTC finish time. Failed rows
+intentionally leave `end` blank.
+
 Allowed result values are `success` and `failure`. A `failure` is intentionally
 broad for now: login/authentication failures, DNS failures, connection failures,
 interrupted transfers, permission failures, local filesystem failures, and other
@@ -188,12 +197,12 @@ not offline. Use `--check` or `-c` for offline/local validation.
 - `lftp`
 - `MERMAID` set in the environment
 - Unified RUDICS credentials CSV at `$MERMAID/passwords/rudics.csv`
+- Optional `SFTP_PORT` override must be numeric
 
-The unified RUDICS credentials CSV is expected to have no header row and use one
-`user,pass` pair per line. Blank lines and lines beginning with `#` are skipped.
-
-Credential files are expected to use simple comma-separated fields; quoted
-commas in fields are not supported.
+The unified RUDICS credentials CSV is intentionally simple unquoted CSV with no
+header row and one `user,pass` pair per line. Blank lines and lines beginning
+with `#` are skipped. No quoted CSV parsing is supported. Usernames and
+passwords must not contain commas, quotes, backslashes, or whitespace.
 
 ## Safety Notes
 

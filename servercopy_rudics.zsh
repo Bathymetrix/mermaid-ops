@@ -6,13 +6,14 @@
 #
 # Mirrors selected MERMAID artifacts from RUDICS SFTP accounts into per-user
 # local server directories.
-# Expects a simple comma-separated credentials file; quoted commas in fields are
-# not supported.
+# Expects intentional simple unquoted credentials: one user,pass pair per line.
+# No quoted CSV parsing is supported; usernames and passwords must not contain
+# commas, quotes, backslashes, or whitespace.
 #
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 21-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.2.1"
+SERVERCOPY_RUDICS_VERSION="0.2.2"
 
 include_patterns=(
     "*.cmd"
@@ -55,17 +56,21 @@ Requirements:
 
 Credentials CSV format:
   - Read from $MERMAID/passwords/rudics.csv.
+  - Intentionally simple unquoted CSV: user,pass
   - No header row is expected.
   - Column 1 must contain the SFTP username.
   - Column 2 must contain the SFTP password.
   - Blank lines are skipped.
   - Lines beginning with # are skipped.
-  - Columns are expected to be simple comma-separated fields.
-  - Quoted commas in fields are not supported.
+  - No quoted CSV parsing is supported.
+  - Usernames and passwords must not contain commas, quotes, backslashes, or
+    whitespace.
+  - Usernames are used as a single local path component and must not be empty,
+    ".", "..", or contain "/".
 
 Notes:
   - Downloads from rudics.thorium.cls.fr using SFTP.
-  - SFTP_PORT may override the default port 22.
+  - SFTP_PORT may override the default port 22 and must be numeric.
   - Mirrors selected MERMAID artifact/log file types from each account into
     $MERMAID/servers/<user>/.
   - Included file patterns, in order:
@@ -313,6 +318,13 @@ runs_ledger="$runs_dir/servercopy_rudics_runs.csv"
 sftp_host="rudics.thorium.cls.fr"
 sftp_port="${SFTP_PORT:-22}"
 
+case "$sftp_port" in
+    ""|*[!0-9]*)
+        printf "Error: SFTP_PORT must be numeric.\n" >&2
+        exit 1
+        ;;
+esac
+
 if [[ ! -r "$credentials_file" ]]; then
     printf "Error: cannot read credentials file: %s\n" "$credentials_file" >&2
     exit 1
@@ -326,6 +338,10 @@ if ! awk -F, '
         }
         if (NF != 2 || $1 == "" || $2 == "") {
             printf "Error: malformed credentials line %d in %s\n", NR, FILENAME > "/dev/stderr"
+            exit 1
+        }
+        if ($1 == "." || $1 == ".." || $1 ~ /\//) {
+            printf "Error: unsafe username path component on credentials line %d in %s: %s\n", NR, FILENAME, $1 > "/dev/stderr"
             exit 1
         }
     }
