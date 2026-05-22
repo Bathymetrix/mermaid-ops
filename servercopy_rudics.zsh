@@ -4,14 +4,35 @@
 # Bathymetrix(TM) MERMAID operations
 # https://bathymetrix.com
 #
-# Mirrors RUDICS SFTP accounts into per-user local server directories.
+# Mirrors selected MERMAID artifacts from RUDICS SFTP accounts into per-user
+# local server directories.
 # Expects a simple comma-separated credentials file; quoted commas in fields are
 # not supported.
 #
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 21-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.1.4"
+SERVERCOPY_RUDICS_VERSION="0.2.0"
+
+include_patterns=(
+    "*.cmd"
+    "*.out"
+    "*.vit"
+    "*.LOG"
+    "*.BIN"
+    "*.MER"
+    "*.[0-9][0-9][0-9]"
+    "*.S41"
+    "*.S61"
+    "*.RBR"
+)
+
+exclude_directories=(
+    "backups/"
+    "tools/"
+    "lib64/"
+    "logs/"
+)
 
 usage() {
     cat <<'EOF'
@@ -23,7 +44,7 @@ Usage:
 
 Options:
   -c, --check        Validate local configuration only
-  --dry-run          Preview remote mirror operations
+  --dry-run          Preview remote artifact mirror operations
   -u, --user USERS   Comma-separated usernames
   -h, --help         Show help
   -v, --version      Show script version
@@ -45,7 +66,24 @@ Credentials CSV format:
 Notes:
   - Downloads from rudics.thorium.cls.fr using SFTP.
   - SFTP_PORT may override the default port 22.
-  - Mirrors each account into $MERMAID/servers/<user>/.
+  - Mirrors selected MERMAID artifact/log file types from each account into
+    $MERMAID/servers/<user>/.
+  - Included file patterns, in order:
+    *.cmd
+    *.out
+    *.vit
+    *.LOG
+    *.BIN
+    *.MER
+    *.[0-9][0-9][0-9]
+    *.S41
+    *.S61
+    *.RBR
+  - Excluded directories:
+    backups/
+    tools/
+    lib64/
+    logs/
   - -u USERS, --user USERS, or --user=USERS processes only matching
     configured users. USERS is a comma-separated username list.
   - Appends one UTC run-ledger row per user mirror attempt to:
@@ -58,10 +96,9 @@ Notes:
     print the mirror operations it would perform without transferring files or
     modifying local files. It does not append to the run ledger. --dry-run is
     not offline. Use --check for offline/local validation.
-  - lftp mirror recurses into subdirectories by default.
   - This script does not delete remote or local mirror files.
   - Remote deletions do not remove local files.
-  - This script intentionally does not exclude remote content.
+  - Files and directories outside the artifact mirror policy are skipped.
 EOF
 }
 
@@ -127,9 +164,9 @@ run_lftp_mirror() {
     local mirror_command
 
     if (( preview )); then
-        mirror_args=("${mirror_options[@]}" --dry-run . "$destination")
+        mirror_args=("${mirror_options[@]}" "${mirror_filter_options[@]}" --dry-run . "$destination")
     else
-        mirror_args=("${mirror_options[@]}" . "$destination")
+        mirror_args=("${mirror_options[@]}" "${mirror_filter_options[@]}" . "$destination")
     fi
     mirror_command="mirror ${(j: :)${(@q)mirror_args}}"
 
@@ -152,8 +189,24 @@ mirror_options=(
     --verbose
     --continue
     --overwrite
+    --no-empty-dirs
     --parallel=4
 )
+mirror_filter_options=(
+    --exclude-glob "*"
+    --include-glob "*/"
+)
+
+# lftp needs an explicit directory include to traverse subdirectories. The
+# catch-all exclude comes first so later artifact includes can override it;
+# directory excludes come after the includes so skipped directories stay skipped.
+for include_pattern in "${include_patterns[@]}"; do
+    mirror_filter_options+=(--include-glob "$include_pattern")
+done
+for exclude_directory in "${exclude_directories[@]}"; do
+    mirror_filter_options+=(--exclude-glob "$exclude_directory")
+    mirror_filter_options+=(--exclude-glob "${exclude_directory}*")
+done
 
 while (( $# > 0 )); do
     case "$1" in
