@@ -23,8 +23,8 @@ $MERMAID/passwords/rudics.csv
 
 The credentials file is intentionally simple unquoted CSV with no header row and
 one `user,pass` pair per line. Blank lines and lines beginning with `#` are
-skipped. No quoted CSV parsing is supported. Usernames and passwords must not
-contain commas, quotes, backslashes, or whitespace.
+skipped. No quoted CSV parsing is supported. Usernames and passwords that
+contain commas, quotes, backslashes, or whitespace are not supported.
 
 Usernames are used as a single local path component under:
 

@@ -13,7 +13,7 @@
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
 # Last modified: 22-May-2026
 
-SERVERCOPY_RUDICS_VERSION="0.4.0"
+SERVERCOPY_RUDICS_VERSION="1.0.0"
 
 usage() {
     cat <<'EOF'
@@ -66,9 +66,9 @@ Notes:
     creating transcript logs.
   - --dry-run contacts and authenticates to RUDICS, then asks lftp to
     print the mirror operations it would perform without transferring files or
-    modifying local files. It writes a transcript log but does not append to
-    the run ledger. --dry-run is not offline. Use --check for offline/local
-    validation.
+    modifying mirror destination files. It writes a transcript log but does not
+    append to the run ledger. --dry-run is not offline. Use --check for
+    offline/local validation.
   - This script does not delete remote or local mirror files.
   - Remote deletions do not remove local files.
   - Remote Unix permissions are not preserved.
