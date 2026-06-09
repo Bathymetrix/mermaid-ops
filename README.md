@@ -11,9 +11,9 @@ behavior should be easy to inspect before running.
 ### `servercopy_rudics.zsh`
 
 Mirror accessible content from RUDICS SFTP accounts into per-user local server
-directories. This workflow skips remote `backups/` directories, does not delete
-local files when remote files disappear, and does not preserve remote Unix
-permission bits.
+directories. This workflow skips remote `backups/` directories and files ending
+in `~`, does not delete local files when remote files disappear, and does not
+preserve remote Unix permission bits.
 
 Credentials are read from:
 
@@ -93,10 +93,11 @@ The workflow mirrors accessible remote content from each account into:
 $MERMAID/servers/<user>/
 ```
 
-Excluded remote directories:
+Excluded remote content:
 
 ```text
 backups/
+*~
 ```
 
 The workflow does not delete local files that are absent remotely and keeps
@@ -196,6 +197,6 @@ transfers nothing, writes a transcript log, and does not append to `_runs`.
 - Check destination paths before running a script for the first time.
 - `servercopy_rudics.zsh` mirrors accessible remote content into
   `$MERMAID/servers/<user>/`.
-- Remote `backups/` directories are skipped.
+- Remote `backups/` directories and files ending in `~` are skipped.
 - Remote deletions do not delete local files.
 - The run ledger is append-only and is not rewritten or truncated.

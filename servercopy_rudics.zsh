@@ -5,15 +5,15 @@
 # https://bathymetrix.com
 #
 # Mirrors accessible RUDICS SFTP account contents into per-user local server
-# directories, excluding remote backups/.
+# directories, excluding remote backups/ and files ending in ~.
 # Expects intentional simple unquoted credentials: one user,pass pair per line.
 # No quoted CSV parsing is supported; usernames and passwords must not contain
 # commas, quotes, backslashes, or whitespace.
 #
 # Author: Joel D. Simon <jdsimon@bathymetrix.com>
-# Last modified: 22-May-2026
+# Last modified: 09-Jun-2026
 
-SERVERCOPY_RUDICS_VERSION="1.0.0"
+SERVERCOPY_RUDICS_VERSION="1.0.1"
 
 usage() {
     cat <<'EOF'
@@ -52,7 +52,7 @@ Notes:
   - Downloads from rudics.thorium.cls.fr using SFTP.
   - SFTP_PORT may override the default port 22 and must be numeric.
   - Mirrors accessible remote content from each account into
-    $MERMAID/servers/<user>/, excluding backups/.
+    $MERMAID/servers/<user>/, excluding backups/ and files ending in ~.
   - -u USERS, --user USERS, or --user=USERS processes only matching
     configured users. USERS is a comma-separated username list.
   - Appends one UTC run-ledger row per user mirror attempt to:
@@ -185,6 +185,7 @@ mirror_filter_options=(
     --exclude-glob "backups/*"
     --exclude-glob "*/backups/"
     --exclude-glob "*/backups/*"
+    --exclude-glob "*~"
 )
 
 while (( $# > 0 )); do
