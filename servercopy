@@ -16,7 +16,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.1.0"
+SERVERCOPY_VERSION = "1.2.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root", "policy")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -139,6 +139,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     modes.add_argument("-c", "--check", action="store_true", help="validate locally only")
     modes.add_argument("--dry-run", action="store_true", help="preview remote mirrors")
     parser.add_argument("-u", "--user", metavar="USERS", help="comma-separated logical users")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path.home() / "mermaid" / "servers",
+        metavar="DIR",
+        help="server output root (default: ~/mermaid/servers/)",
+    )
     parser.add_argument(
         "-v", "--version", action="version", version=f"servercopy {SERVERCOPY_VERSION}"
     )
@@ -276,7 +284,7 @@ def run_lftp(executable: str, script: str) -> tuple[int, str]:
 def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
     sources_path = Path(__file__).resolve().with_name("servercopy_sources.csv")
     credentials_path = root / "passwords" / "servercopy_credentials.csv"
-    server_root = root / "servers"
+    server_root = args.output.expanduser()
     ledger = server_root / "_runs" / "servercopy_runs.csv"
     lftp = shutil.which("lftp")
     if not lftp:
@@ -432,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             report.close()
 
-    runs = root / "servers" / "_runs"
+    runs = args.output.expanduser() / "_runs"
     try:
         runs.mkdir(parents=True, exist_ok=True)
         lock = (runs / "servercopy.lock").open("a+", encoding="ascii")

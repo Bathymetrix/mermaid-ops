@@ -17,6 +17,13 @@ LOADER.exec_module(servercopy)
 
 
 class LftpCommandTests(unittest.TestCase):
+    def test_output_default_and_override(self) -> None:
+        default = servercopy.parse_args([])
+        overridden = servercopy.parse_args(["--output", "~/alternate-servers"])
+
+        self.assertEqual(default.output, Path.home() / "mermaid" / "servers")
+        self.assertEqual(overridden.output.expanduser(), Path.home() / "alternate-servers")
+
     def test_rudics_broad_preview_preserves_current_policy(self) -> None:
         source = servercopy.Source(
             "s_m0057",

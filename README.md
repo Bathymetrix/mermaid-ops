@@ -37,9 +37,13 @@ The logical user and authentication login may differ. This allows `eso` and
 `kobeuni` to use one shared Taal login while retaining distinct destinations:
 
 ```text
-$MERMAID/servers/eso/
-$MERMAID/servers/kobeuni/
+~/mermaid/servers/eso/
+~/mermaid/servers/kobeuni/
 ```
+
+The output root defaults to `~/mermaid/servers/`. Override it with
+`-o DIR` or `--output DIR`; every mirror, ledger, transcript, and lock is then
+written beneath that root.
 
 The checked-in Taal rows use `taal_login` as a placeholder. Replace it in
 `servercopy_sources.csv` with the real, non-secret authentication username
@@ -138,8 +142,15 @@ Process only selected logical users:
 ./servercopy -u s_m0057,eso
 ```
 
-User filtering works with normal, check, and dry-run modes. Show help or the
-operational version with:
+Use a different server output root:
+
+```sh
+./servercopy --output /path/to/servers
+./servercopy -o /path/to/servers
+```
+
+User filtering and output selection work with normal, check, and dry-run modes.
+Show help or the operational version with:
 
 ```sh
 ./servercopy --help
@@ -154,7 +165,7 @@ number from 1 through 65535. It does not affect FTPS sources.
 Normal runs append one row per attempted logical user to:
 
 ```text
-$MERMAID/servers/_runs/servercopy_runs.csv
+<output>/_runs/servercopy_runs.csv
 ```
 
 The ledger retains the existing format:
@@ -176,7 +187,7 @@ renaming historical output.
 Every normal or dry-run invocation writes one raw combined stdout/stderr log:
 
 ```text
-$MERMAID/servers/_runs/servercopy_<UTC>.log
+<output>/_runs/servercopy_<UTC>.log
 ```
 
 Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
@@ -187,8 +198,8 @@ script prints a failure summary and exits nonzero if any selected source fails.
 Successful all-source runs exit zero. Missing or malformed local configuration
 also exits nonzero before transfer attempts begin.
 
-An advisory lock at `$MERMAID/servers/_runs/servercopy.lock` prevents overlapping
-normal and dry-run invocations. This is intended for unattended cron use.
+An advisory lock at `<output>/_runs/servercopy.lock` prevents overlapping normal
+and dry-run invocations. This is intended for unattended cron use.
 
 ## Cron
 
@@ -198,7 +209,8 @@ the current Homebrew installation, the command environment can use:
 ```sh
 MERMAID=/Users/jdsimon/mermaid
 PATH=/opt/homebrew/bin:/usr/bin:/bin
-/Users/jdsimon/programs/mermaid-ops/servercopy
+/Users/jdsimon/programs/mermaid-ops/servercopy \
+  --output /Users/jdsimon/mermaid/servers
 ```
 
 Keep cron's own mail or redirection enabled as an additional alerting channel.
@@ -211,6 +223,7 @@ The `_runs` transcript remains the detailed diagnostic record.
 - `MERMAID` set in the environment
 - Readable `servercopy_sources.csv` beside the executable
 - Readable protected credentials at the configured path
+- Writable output root, defaulting to `~/mermaid/servers/`
 
 ## Tests
 
@@ -227,7 +240,7 @@ The tests use fake credentials and do not contact remote servers.
 
 - Check the source registry and destination mapping before the first run.
 - Run `--check`, then `--dry-run`, before the first normal combined mirror.
-- Normal mirrors may modify files beneath `$MERMAID/servers/<user>/`.
+- Normal mirrors may modify files beneath `<output>/<user>/`.
 - Remote deletions do not remove local files.
 - Credentials, generated server data, and local sync output must not be
   committed.

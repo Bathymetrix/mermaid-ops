@@ -65,8 +65,9 @@ destination for each serial.
 Resolved conventions:
 
 - Use the CLS-preferred `rudics.thorium.cls.fr` endpoint.
-- Mirror each logical user into `$MERMAID/servers/<user>/`, even when logical
-  users share one authentication login.
+- Mirror each logical user into `<output>/<user>/`, defaulting to
+  `~/mermaid/servers/<user>/`, even when logical users share one authentication
+  login.
 - Retain `user,result,start,end,ver`; the `user` value is the logical user.
 
 ## Retired sources to classify
