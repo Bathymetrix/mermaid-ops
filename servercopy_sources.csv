@@ -3,6 +3,10 @@ s_mermaid,s_mermaid,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_psdmaid,s_psdmaid,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_m0056,s_m0056,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_m0057,s_m0057,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
+s_m0075,s_m0075,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
+s_m0076,s_m0076,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
+s_m0077,s_m0077,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
+s_m0080,s_m0080,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_m0101,s_m0101,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_m0102,s_m0102,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_m0095,s_m0095,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
@@ -13,5 +17,5 @@ s_m0099,s_m0099,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_m0106,s_m0106,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_m0107,s_m0107,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
 s_m0108,s_m0108,sftp,rudics.thorium.cls.fr,22,.,rudics-broad
-eso,taal_login,ftps-explicit,taal.unice.fr,21,eso/,mermaid-selected
-kobeuni,taal_login,ftps-explicit,taal.unice.fr,21,kobeuni/,mermaid-selected
+eso,automaid,ftps-explicit,taal.unice.fr,21,eso/,mermaid-selected
+kobeuni,automaid,ftps-explicit,taal.unice.fr,21,kobeuni/,mermaid-selected

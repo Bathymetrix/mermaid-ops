@@ -45,9 +45,7 @@ The output root defaults to `~/mermaid/servers/`. Override it with
 `-o DIR` or `--output DIR`; every mirror, ledger, transcript, and lock is then
 written beneath that root.
 
-The checked-in Taal rows use `taal_login` as a placeholder. Replace it in
-`servercopy_sources.csv` with the real, non-secret authentication username
-before running all configured sources.
+The ESO and Kobe rows share the `automaid` authentication login.
 
 ## Credentials
 
@@ -62,7 +60,7 @@ The file is intentionally simple unquoted CSV with no header row and one
 
 ```csv
 s_m0057,example-not-a-real-password
-taal_login,another-example-not-a-real-password
+automaid,another-example-not-a-real-password
 ```
 
 Blank lines and lines beginning with `#` are skipped. Logins and passwords that
@@ -189,6 +187,9 @@ Every normal or dry-run invocation writes one raw combined stdout/stderr log:
 ```text
 <output>/_runs/servercopy_<UTC>.log
 ```
+
+Credential-bearing URL user information emitted by `lftp --dry-run` is replaced
+with `[REDACTED]` before output is written to the terminal or transcript.
 
 Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
 a transcript but no ledger rows. Normal runs write both.

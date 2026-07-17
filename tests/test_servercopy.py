@@ -17,6 +17,14 @@ LOADER.exec_module(servercopy)
 
 
 class LftpCommandTests(unittest.TestCase):
+    def test_lftp_output_redacts_url_credentials(self) -> None:
+        output = "get sftp://example-user:fake-password@example.test/file"
+
+        redacted = servercopy.redact_lftp_output(output)
+
+        self.assertEqual(redacted, "get sftp://[REDACTED]@example.test/file")
+        self.assertNotIn("fake-password", redacted)
+
     def test_output_default_and_override(self) -> None:
         default = servercopy.parse_args([])
         overridden = servercopy.parse_args(["--output", "~/alternate-servers"])
@@ -51,7 +59,7 @@ class LftpCommandTests(unittest.TestCase):
     def test_taal_preview_uses_explicit_ftps_and_selected_extensions(self) -> None:
         source = servercopy.Source(
             "eso",
-            "taal_login",
+            "automaid",
             "ftps-explicit",
             "taal.unice.fr",
             21,

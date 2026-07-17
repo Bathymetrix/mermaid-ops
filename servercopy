@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 import fcntl
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -16,7 +17,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.2.0"
+SERVERCOPY_VERSION = "1.3.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root", "policy")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -35,6 +36,7 @@ RUDICS_FILTERS = (
     "--exclude-glob=*~",
 )
 MERMAID_EXTENSIONS = (".MER", ".LOG", ".BIN", ".cmd", ".out", ".vit")
+CREDENTIAL_URL = re.compile(r"((?:sftp|ftp)://)[^/@\s]+@")
 
 
 class ConfigError(Exception):
@@ -281,6 +283,10 @@ def run_lftp(executable: str, script: str) -> tuple[int, str]:
         return 1, str(error)
 
 
+def redact_lftp_output(text: str) -> str:
+    return CREDENTIAL_URL.sub(r"\1[REDACTED]@", text)
+
+
 def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
     sources_path = Path(__file__).resolve().with_name("servercopy_sources.csv")
     credentials_path = root / "passwords" / "servercopy_credentials.csv"
@@ -379,6 +385,7 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
             lftp,
             build_lftp_script(source, credentials[source.login], destination, args.dry_run),
         )
+        text = redact_lftp_output(text)
         if code == 0:
             output(text)
             if not args.dry_run:

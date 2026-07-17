@@ -46,11 +46,15 @@ verified in the intended destination.
 Identify the full instrument ID, source, remote account, and intended local
 destination for each serial.
 
-- [ ] `0030`
+- [x] `0030`: external credential filename was misleading; its actual
+  `s_m0023` login is encompassed by broad `s_mermaid`.
 - [ ] `0075`
 - [ ] `0076`
 - [ ] `0077`
 - [ ] `0080`
+
+All four accounts authenticated at `rudics.thorium.cls.fr` in a dry-run preview
+on 2026-07-17. Normal mirrors and output verification remain pending.
 
 ## Source reconciliation
 
