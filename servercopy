@@ -30,20 +30,16 @@ COMMON_OPTIONS = (
     "--no-perms",
     "--parallel=4",
 )
-MIRROR_SUFFIX_GLOBS = (
-    ".[0-9][0-9][0-9]",
-    ".BIN",
-    ".LOG",
-    ".MER",
-    ".S41",
-    ".S61",
-    ".out",
-    ".vit",
-)
-CREDENTIAL_URL = re.compile(r"((?:sftp|ftp)://)[^/@\s]+@")
+SUFFIX_ALLOWLIST = Path(__file__).resolve().parent / "data" / "filename_suffixes.txt"
+SUFFIX_ENTRY = re.compile(r"(?:[A-Za-z0-9]+|(?:\[0-9\])+)$")
+CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
 HEARTBEAT_SECONDS = 30.0
 LFTP_SILENCE_TIMEOUT_SECONDS = 300.0
-LFTP_DIAGNOSTIC_PREFIXES = ("mirror:", "open:", "get:", "put:", "mget:", "pget:")
+LISTING_BEGIN_MARKER = "[servercopy] listing-begin"
+LISTING_END_MARKER = "[servercopy] listing-end"
+LFTP_DIAGNOSTIC_PREFIXES = (
+    "mirror:", "open:", "cls:", "cd:", "get:", "put:", "mget:", "pget:"
+)
 
 
 class ConfigError(Exception):
@@ -91,9 +87,17 @@ def mirror(arguments: list[str]) -> str:
     return "mirror " + " ".join(quote(argument) for argument in arguments)
 
 
-def build_lftp_script(source: Source, password: str, destination: Path, preview: bool) -> str:
+def build_lftp_script(
+    source: Source,
+    password: str,
+    destination: Path,
+    preview: bool,
+    suffix_globs: tuple[str, ...],
+) -> str:
     """Build lftp input for one source; the password never enters process argv."""
 
+    if not suffix_globs:
+        raise ConfigError("filename suffix allowlist is empty")
     lines = [
         "set cmd:fail-exit yes",
         "set net:timeout 30s",
@@ -120,7 +124,7 @@ def build_lftp_script(source: Source, password: str, destination: Path, preview:
     dry_run = ["--dry-run"] if preview else []
     root = source.remote_root.rstrip("/") or "."
     lines.append(
-        f"echo {quote(f'[servercopy] step=selected-files patterns={len(MIRROR_SUFFIX_GLOBS)}')}"
+        f"echo {quote(f'[servercopy] step=selected-files patterns={len(suffix_globs)}')}"
     )
     # The clever repeated --file mirror stalled during a live Taal run. Stick
     # to one nonrecursive mirror and lftp's documented repeatable include globs
@@ -132,7 +136,7 @@ def build_lftp_script(source: Source, password: str, destination: Path, preview:
                 "--no-recursion",
                 *dry_run,
                 "--exclude-glob=*",
-                *(f"--include-glob=*{suffix}" for suffix in MIRROR_SUFFIX_GLOBS),
+                *(f"--include-glob=*{suffix}" for suffix in suffix_globs),
                 root,
                 str(destination),
             ]
@@ -141,11 +145,58 @@ def build_lftp_script(source: Source, password: str, destination: Path, preview:
     return "\n".join([*lines, "bye", ""])
 
 
+def build_listing_lftp_script(source: Source, password: str, listing_tls: str) -> str:
+    """Build a read-only explicit-FTPS directory-listing diagnostic."""
+
+    if source.protocol != "ftps-explicit":
+        raise ConfigError("listing diagnostics are supported only for explicit FTPS")
+    try:
+        protect_list = {"protected": "yes", "unprotected": "no"}[listing_tls]
+    except KeyError as error:
+        raise ConfigError(f"invalid listing TLS mode: {listing_tls}") from error
+    root = source.remote_root.rstrip("/")
+    listing_target = "." if root in {"", "."} else f"{root}/"
+    return "\n".join([
+        "set cmd:trace no",
+        "set cmd:fail-exit yes",
+        'set cmd:cls-default ""',
+        "set cmd:save-cwd-history no",
+        "set cmd:save-rl-history no",
+        "set net:timeout 30s",
+        "set net:max-retries 2",
+        "set xfer:timeout 5m",
+        "set ftp:ssl-force yes",
+        "set ftp:ssl-protect-data yes",
+        f"set ftp:ssl-protect-list {protect_list}",
+        "set ftp:use-stat-for-list no",
+        "set ftp:list-empty-ok yes",
+        "set ssl:verify-certificate yes",
+        f'open -u {quote(source.login)},{quote(password)} '
+        f'{quote(f"ftp://{source.host}:{source.port}")}',
+        f"command cd {quote(listing_target)}",
+        f"echo {quote(LISTING_BEGIN_MARKER)}",
+        'command cls -1 -q -B "."',
+        f"echo {quote(LISTING_END_MARKER)}",
+        "bye",
+        "",
+    ])
+
+
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Mirror configured MERMAID server sources.")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("-c", "--check", action="store_true", help="validate locally only")
     modes.add_argument("--dry-run", action="store_true", help="preview remote mirrors")
+    modes.add_argument(
+        "--diagnose-listing",
+        action="store_true",
+        help="authenticate and list one explicit-FTPS source without writing files",
+    )
+    parser.add_argument(
+        "--listing-tls",
+        choices=("protected", "unprotected"),
+        help="directory-listing data-channel TLS for --diagnose-listing",
+    )
     parser.add_argument("-u", "--user", metavar="USERS", help="comma-separated logical users")
     parser.add_argument(
         "-o",
@@ -158,7 +209,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "-v", "--version", action="version", version=f"servercopy {SERVERCOPY_VERSION}"
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.listing_tls is not None and not args.diagnose_listing:
+        parser.error("--listing-tls requires --diagnose-listing")
+    return args
 
 
 def valid_name(value: str) -> bool:
@@ -209,6 +263,29 @@ def load_sources(path: Path) -> list[Source]:
     if not sources:
         raise ConfigError(f"no sources configured in {path}")
     return sources
+
+
+def load_suffix_globs(path: Path) -> tuple[str, ...]:
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise ConfigError(f"cannot read filename suffix allowlist: {path}: {error}") from error
+
+    suffixes: list[str] = []
+    seen: set[str] = set()
+    for line_number, line in enumerate(lines, 1):
+        value = line.strip()
+        if not value or value.startswith("#"):
+            continue
+        if not SUFFIX_ENTRY.fullmatch(value):
+            raise ConfigError(f"malformed filename suffix line {line_number} in {path}")
+        if value in seen:
+            raise ConfigError(f"duplicate filename suffix on line {line_number}: {value}")
+        suffixes.append(f".{value}")
+        seen.add(value)
+    if not suffixes:
+        raise ConfigError(f"no filename suffixes configured in {path}")
+    return tuple(suffixes)
 
 
 def load_credentials(path: Path) -> dict[str, str]:
@@ -280,12 +357,13 @@ def run_lftp(
     user: str,
     heartbeat_seconds: float = HEARTBEAT_SECONDS,
     silence_timeout_seconds: float = LFTP_SILENCE_TIMEOUT_SECONDS,
+    norc: bool = False,
 ) -> tuple[int, list[str]]:
     """Run lftp while streaming redacted lines and reporting silent intervals."""
 
     try:
         process = subprocess.Popen(
-            [executable],
+            [executable, *(["--norc"] if norc else [])],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -398,6 +476,15 @@ def lftp_failure_detail(code: int, lines: list[str]) -> str:
     return "\n".join(detail)
 
 
+def listing_entry_count(lines: list[str]) -> int | None:
+    try:
+        begin = lines.index(LISTING_BEGIN_MARKER)
+        end = lines.index(LISTING_END_MARKER, begin + 1)
+    except ValueError:
+        return None
+    return sum(1 for line in lines[begin + 1 : end] if line)
+
+
 def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
     sources_path = Path(__file__).resolve().with_name("servercopy_sources.csv")
     credentials_path = root / "passwords" / "servercopy_credentials.csv"
@@ -410,6 +497,7 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
 
     try:
         sources = load_sources(sources_path)
+        suffix_globs = () if args.diagnose_listing else load_suffix_globs(SUFFIX_ALLOWLIST)
         override = os.environ.get("SFTP_PORT")
         if override:
             if not override.isdecimal() or not 1 <= int(override) <= 65535:
@@ -419,17 +507,21 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
                 for source in sources
             ]
         requested = requested_users(args.user)
+        if args.diagnose_listing and (requested is None or len(requested) != 1):
+            raise ConfigError("--diagnose-listing requires exactly one logical user via --user")
         configured = {source.user for source in sources}
         missing_users = [user for user in requested or [] if user not in configured]
         if requested is not None:
             sources = [source for source in sources if source.user in set(requested)]
         if not sources:
             raise ConfigError(f"no requested users were found in {sources_path}")
+        if args.diagnose_listing and sources[0].protocol != "ftps-explicit":
+            raise ConfigError("--diagnose-listing is supported only for explicit-FTPS sources")
         credentials = load_credentials(credentials_path)
         missing_logins = sorted({source.login for source in sources} - credentials.keys())
         if missing_logins:
             raise ConfigError("missing credential login(s): " + ",".join(missing_logins))
-        if not args.check and not args.dry_run:
+        if not args.check and not args.dry_run and not args.diagnose_listing:
             prepare_ledger(ledger)
     except (ConfigError, OSError) as error:
         report.write(f"Error: {error}", error=True)
@@ -448,11 +540,10 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         failures[user] = lines
 
     for source in sources:
-        destination = server_root / source.user
-        start = utc_now()
         remote = remote_url(source)
 
         if args.check:
+            destination = server_root / source.user
             for key, value in (
                 ("user", source.user),
                 ("login", source.login),
@@ -466,6 +557,50 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
                 fail(source.user, f"destination exists but is not a directory: {destination}")
             continue
 
+        if args.diagnose_listing:
+            label = "diagnose-listing"
+            listing_tls = args.listing_tls or "protected"
+            report.write(f"[{label}] user={source.user}")
+            report.write(f"[{label}] remote-root={source.remote_root}")
+            report.write(f"[{label}] listing-tls={listing_tls}")
+            report.write(f"[{label}] lftp directory listing output follows:")
+
+            lftp_started = time.monotonic()
+            code, lines = run_lftp(
+                lftp,
+                build_listing_lftp_script(
+                    source,
+                    credentials[source.login],
+                    listing_tls,
+                ),
+                report,
+                label,
+                source.user,
+                norc=True,
+            )
+            elapsed = int(time.monotonic() - lftp_started)
+            count = listing_entry_count(lines)
+            if code == 0 and count is not None:
+                report.write(
+                    f"[{label}] listing succeeded user={source.user} "
+                    f"entries={count} elapsed={elapsed}s"
+                )
+            else:
+                status = (
+                    "timed out"
+                    if code == 124 and any("timed out" in line for line in lines)
+                    else "failed"
+                )
+                report.write(f"[{label}] listing {status} user={source.user} elapsed={elapsed}s")
+                detail = lftp_failure_detail(code, lines)
+                if count is None:
+                    detail += "\nlisting completion marker was not received"
+                fail(source.user, detail)
+            report.write()
+            continue
+
+        destination = server_root / source.user
+        start = utc_now()
         if not args.dry_run:
             try:
                 destination.mkdir(parents=True, exist_ok=True)
@@ -487,7 +622,13 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         lftp_started = time.monotonic()
         code, lines = run_lftp(
             lftp,
-            build_lftp_script(source, credentials[source.login], destination, args.dry_run),
+            build_lftp_script(
+                source,
+                credentials[source.login],
+                destination,
+                args.dry_run,
+                suffix_globs,
+            ),
             report,
             label,
             source.user,
@@ -528,6 +669,8 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
 
     if args.check:
         report.write(f"DONE: local check completed for {server_root}")
+    elif args.diagnose_listing:
+        report.write("DONE: directory listing diagnostic completed")
     elif args.dry_run:
         report.write(f"DONE: dry run completed for {server_root}")
     else:
@@ -555,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     root = Path(mermaid)
 
-    if args.check:
+    if args.check or args.diagnose_listing:
         report = Reporter()
         try:
             return guarded_workflow(args, root, report)

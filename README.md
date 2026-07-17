@@ -97,13 +97,17 @@ out
 vit
 ```
 
-The top-level tuple contains eight glob patterns. A focused test keeps it
-consistent with the compact reference file. `servercopy` performs one
-nonrecursive directory mirror per source, using lftp's documented repeatable
-include-glob filters for every pattern. A previous attempt to combine repeated
-`mirror --file` globs stalled during live selection against Taal, so the script
-does not rely on that behavior. Files outside the allowlist, including
-operational dotfiles, tools, backups, and `cmd` files, are not selected.
+This file is the authoritative runtime allowlist; the Python script does not
+contain a second suffix list. Blank lines and full-line `#` comments are
+allowed. Malformed, duplicate, unreadable, and empty allowlists fail before
+lftp starts.
+
+`servercopy` performs one nonrecursive directory mirror per source, using
+lftp's repeatable include-glob filters in the file's order. A previous attempt
+to combine repeated `mirror --file` globs stalled during live selection against
+Taal, so the script does not rely on that behavior. Files outside the
+allowlist, including operational dotfiles, tools, backups, and `cmd` files, are
+not selected.
 
 Transfers continue existing partial files, overwrite changed files, do not
 preserve remote permissions, and use up to four parallel transfers. Remote
@@ -126,6 +130,12 @@ migration.
 Taal uses explicit FTPS on port 21. TLS is required, data and directory-listing
 connections are protected, and the server certificate is verified.
 
+FileZilla has independently authenticated to Taal, listed remote directories,
+and copied files. It currently reports 5,835 files and 155,451,811 bytes in the
+Kobe root. The remaining investigation is therefore scoped to lftp/Taal FTPS
+interoperability rather than general reachability, credentials, or remote-root
+validity.
+
 ## Usage
 
 Normal mirror of all configured users:
@@ -147,6 +157,19 @@ Authenticate and preview remote mirror operations without transferring files:
 ./servercopy --dry-run
 ```
 
+Compare protected and unprotected FTPS directory listings without mirroring:
+
+```sh
+./servercopy --user eso --diagnose-listing --listing-tls protected
+./servercopy --user eso --diagnose-listing --listing-tls unprotected
+```
+
+`--diagnose-listing` requires exactly one explicit-FTPS user. It runs no mirror
+or transfer command and creates no destination, ledger, transcript, or lock.
+Output is redacted and streamed to the terminal under the existing five-minute
+silence watchdog. The unprotected comparison exposes listing metadata, but
+`ftp:ssl-protect-data yes` remains enabled.
+
 Process only selected logical users:
 
 ```sh
@@ -163,7 +186,8 @@ Use a different server output root:
 ```
 
 User filtering and output selection work with normal, check, and dry-run modes.
-Show help or the operational version with:
+Listing diagnostics require one user and ignore the output root. Show help or
+the operational version with:
 
 ```sh
 ./servercopy --help
@@ -211,7 +235,8 @@ line with elapsed and silent time. Each source prints the number of active
 suffix patterns before its single mirror operation.
 
 Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
-a transcript but no ledger rows. Normal runs write both.
+a transcript but no ledger rows. Listing diagnostics create none of these and
+stream directly to the terminal. Normal runs write both.
 
 An individual source failure does not prevent later sources from running. The
 script prints the source result and lftp exit status immediately, then prints a
@@ -244,25 +269,27 @@ The `_runs` transcript remains the detailed diagnostic record.
 - `lftp`
 - `MERMAID` set in the environment
 - Readable `servercopy_sources.csv` beside the executable
+- Readable `data/filename_suffixes.txt` beneath the executable's directory
 - Readable protected credentials at the configured path
 - Writable output root, defaulting to `~/mermaid/servers/`
 
 ## Tests
 
-The test suite is intentionally small. It checks generated RUDICS and Taal
-`lftp` commands plus output streaming, redaction, heartbeats, and silence
-termination:
+The test suite checks suffix parsing, generated lftp scripts, listing
+diagnostics, output streaming, redaction, heartbeats, and silence termination:
 
 ```sh
 python3.14 -m unittest discover -s tests -v
 ```
 
-The tests use fake credentials and do not contact remote servers.
+The tests use fake credentials and mocked lftp processes. They do not contact
+remote servers.
 
 ## Safety notes
 
 - Check the source registry and destination mapping before the first run.
 - Run `--check`, then `--dry-run`, before the first normal combined mirror.
+- Treat `--dry-run` and `--diagnose-listing` as authenticated remote operations.
 - Normal mirrors may modify files beneath `<output>/<user>/`.
 - Remote deletions do not remove local files.
 - Credentials, generated server data, and local sync output must not be
