@@ -74,7 +74,14 @@ class LftpCommandTests(unittest.TestCase):
         self.assertEqual(default.output, Path.home() / "mermaid" / "servers")
         self.assertEqual(overridden.output.expanduser(), Path.home() / "alternate-servers")
 
-    def test_rudics_broad_preview_preserves_current_policy(self) -> None:
+    def test_source_registry_uses_endpoint_fields_only(self) -> None:
+        sources = servercopy.load_sources(SCRIPT.with_name("servercopy_sources.csv"))
+
+        self.assertEqual(len(sources), 20)
+        self.assertEqual(sources[-1].user, "kobeuni")
+        self.assertFalse(hasattr(sources[-1], "policy"))
+
+    def test_rudics_preview_uses_shared_suffix_allowlist(self) -> None:
         source = servercopy.Source(
             "s_m0057",
             "s_m0057",
@@ -82,7 +89,6 @@ class LftpCommandTests(unittest.TestCase):
             "rudics.thorium.cls.fr",
             22,
             ".",
-            "rudics-broad",
         )
 
         script = servercopy.build_lftp_script(
@@ -94,12 +100,13 @@ class LftpCommandTests(unittest.TestCase):
         self.assertIn('"--dry-run"', script)
         self.assertIn('"--continue"', script)
         self.assertIn('"--no-perms"', script)
-        self.assertIn('"--exclude-glob=backups/*"', script)
-        self.assertIn('"--exclude-glob=*~"', script)
-        self.assertIn('echo "[servercopy] step=rudics-broad"', script)
+        self.assertIn('"--file=./*.[0-9][0-9][0-9]"', script)
+        self.assertIn('"--file=./*.MER"', script)
+        self.assertNotIn('"--file=./*.cmd"', script)
+        self.assertIn('echo "[servercopy] step=selected-files patterns=8"', script)
         self.assertEqual(script.count("mirror "), 1)
 
-    def test_taal_preview_uses_explicit_ftps_and_selected_extensions(self) -> None:
+    def test_taal_preview_uses_explicit_ftps_and_shared_suffix_allowlist(self) -> None:
         source = servercopy.Source(
             "eso",
             "automaid",
@@ -107,7 +114,6 @@ class LftpCommandTests(unittest.TestCase):
             "taal.unice.fr",
             21,
             "eso/",
-            "mermaid-selected",
         )
 
         script = servercopy.build_lftp_script(
@@ -117,13 +123,20 @@ class LftpCommandTests(unittest.TestCase):
         self.assertIn("set ftp:ssl-force yes", script)
         self.assertIn("set ssl:verify-certificate yes", script)
         self.assertIn('"ftp://taal.unice.fr:21"', script)
-        self.assertEqual(script.count("mirror "), 6)
-        for extension in servercopy.MERMAID_EXTENSIONS:
-            self.assertIn(f'"--file=eso/*{extension}"', script)
-            self.assertIn(
-                f'echo "[servercopy] step=mermaid-selected extension={extension}"', script
-            )
+        self.assertEqual(script.count("mirror "), 1)
+        for suffix in servercopy.MIRROR_SUFFIX_GLOBS:
+            self.assertIn(f'"--file=eso/*{suffix}"', script)
         self.assertIn('"--target-directory=/tmp/servers/eso"', script)
+
+    def test_suffix_reference_matches_top_level_allowlist(self) -> None:
+        reference = SCRIPT.parent / "data" / "filename_suffixes.txt"
+        patterns = tuple(
+            f".{line}"
+            for line in reference.read_text(encoding="ascii").splitlines()
+            if line
+        )
+
+        self.assertEqual(patterns, servercopy.MIRROR_SUFFIX_GLOBS)
 
     def test_failure_detail_keeps_diagnostics_not_transfer_chatter(self) -> None:
         detail = servercopy.lftp_failure_detail(

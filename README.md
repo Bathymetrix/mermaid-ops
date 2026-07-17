@@ -4,7 +4,7 @@ Operational scripts for MERMAID data and server workflows.
 
 The canonical server-copy workflow is the directly executable `servercopy`
 Python script. It mirrors configured remote content into per-user directories,
-records each attempt in an append-only CSV ledger, and writes raw combined
+records each attempt in an append-only CSV ledger, and writes combined
 stdout/stderr transcripts for cron diagnostics. It does not delete local mirror
 files, commit copied data to Git, convert VIT files, or run exports.
 
@@ -23,7 +23,7 @@ servercopy_sources.csv
 Columns:
 
 ```csv
-user,login,protocol,host,port,remote_root,policy
+user,login,protocol,host,port,remote_root
 ```
 
 - `user` is the logical server user and local destination name.
@@ -31,7 +31,6 @@ user,login,protocol,host,port,remote_root,policy
 - `protocol` is `sftp` or `ftps-explicit`.
 - `host` and `port` identify the remote endpoint.
 - `remote_root` is the directory or file-group root mirrored for the user.
-- `policy` selects one of the small built-in mirror policies.
 
 The logical user and authentication login may differ. This allows `eso` and
 `kobeuni` to use one shared Taal login while retaining distinct destinations:
@@ -76,30 +75,38 @@ the new credential registry unchanged, then add the one shared Taal login. This
 is an operator-managed credential step; `servercopy` does not import, rewrite,
 or print credentials.
 
-## Mirror policies
+## Filename selection
 
-`rudics-broad` preserves the current RUDICS behavior. It mirrors accessible
-remote content using continuing, overwriting, non-permission-preserving,
-four-way parallel transfers while excluding:
+Every RUDICS and Taal source uses the same filename-suffix allowlist. The
+compact reference list is tracked in:
 
 ```text
-backups/
-*~
+data/filename_suffixes.txt
 ```
 
-Remote files removed from RUDICS do not delete local files.
-
-`mermaid-selected` is used for the ESO and Kobe subtrees on `taal.unice.fr`.
-It mirrors these file extensions into each logical user's destination:
+`[0-9][0-9][0-9]` is an lftp glob matching exactly the three-digit suffixes
+`.000` through `.999` that actually exist. The remaining allowed suffixes are:
 
 ```text
-MER
-LOG
 BIN
-cmd
+LOG
+MER
+S41
+S61
 out
 vit
 ```
+
+The top-level tuple contains eight glob patterns. A focused test keeps it
+consistent with the compact reference file. `servercopy` passes all patterns to
+one lftp `mirror` command per source, so there is one connection and one mirror
+operation rather than a separate pass for each suffix. Files outside the
+allowlist, including operational dotfiles, tools, backups, and `cmd` files, are
+not selected.
+
+Transfers continue existing partial files, overwrite changed files, do not
+preserve remote permissions, and use up to four parallel transfers. Remote
+files removed from a source do not delete local files.
 
 RUDICS uses SFTP on the CLS-preferred endpoint
 `rudics.thorium.cls.fr`. The legacy name `iridium-rudics.cls.fr` was checked

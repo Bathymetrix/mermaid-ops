@@ -21,7 +21,7 @@ from typing import NamedTuple, TextIO
 
 
 SERVERCOPY_VERSION = "1.4.0"
-SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root", "policy")
+SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
     "--verbose",
@@ -31,14 +31,16 @@ COMMON_OPTIONS = (
     "--no-empty-dirs",
     "--parallel=4",
 )
-RUDICS_FILTERS = (
-    "--exclude-glob=backups/",
-    "--exclude-glob=backups/*",
-    "--exclude-glob=*/backups/",
-    "--exclude-glob=*/backups/*",
-    "--exclude-glob=*~",
+MIRROR_SUFFIX_GLOBS = (
+    ".[0-9][0-9][0-9]",
+    ".BIN",
+    ".LOG",
+    ".MER",
+    ".S41",
+    ".S61",
+    ".out",
+    ".vit",
 )
-MERMAID_EXTENSIONS = (".MER", ".LOG", ".BIN", ".cmd", ".out", ".vit")
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp)://)[^/@\s]+@")
 HEARTBEAT_SECONDS = 30.0
 LFTP_DIAGNOSTIC_PREFIXES = ("mirror:", "open:", "get:", "put:", "mget:", "pget:")
@@ -55,7 +57,6 @@ class Source(NamedTuple):
     host: str
     port: int
     remote_root: str
-    policy: str
 
 
 class Reporter:
@@ -110,37 +111,20 @@ def build_lftp_script(source: Source, password: str, destination: Path, preview:
 
     lines.append(f"open -u {quote(source.login)},{quote(password)} {quote(url)}")
     dry_run = ["--dry-run"] if preview else []
-    if source.policy == "rudics-broad":
-        lines.append(f"echo {quote('[servercopy] step=rudics-broad')}")
-        lines.append(
-            mirror(
-                [
-                    *COMMON_OPTIONS,
-                    *RUDICS_FILTERS,
-                    *dry_run,
-                    source.remote_root,
-                    str(destination),
-                ]
-            )
+    root = source.remote_root.rstrip("/") or "."
+    lines.append(
+        f"echo {quote(f'[servercopy] step=selected-files patterns={len(MIRROR_SUFFIX_GLOBS)}')}"
+    )
+    lines.append(
+        mirror(
+            [
+                *COMMON_OPTIONS,
+                *dry_run,
+                *(f"--file={root}/*{suffix}" for suffix in MIRROR_SUFFIX_GLOBS),
+                f"--target-directory={destination}",
+            ]
         )
-    elif source.policy == "mermaid-selected":
-        root = source.remote_root.rstrip("/")
-        for extension in MERMAID_EXTENSIONS:
-            lines.append(
-                f"echo {quote(f'[servercopy] step=mermaid-selected extension={extension}')}"
-            )
-            lines.append(
-                mirror(
-                    [
-                        *COMMON_OPTIONS,
-                        *dry_run,
-                        f"--file={root}/*{extension}",
-                        f"--target-directory={destination}",
-                    ]
-                )
-            )
-    else:
-        raise ConfigError(f"unsupported mirror policy for {source.user}: {source.policy}")
+    )
     return "\n".join([*lines, "bye", ""])
 
 
@@ -190,7 +174,7 @@ def load_sources(path: Path) -> list[Source]:
                 continue
             if len(row) != len(SOURCE_FIELDS):
                 raise ConfigError(f"malformed source registry line {line_number} in {path}")
-            user, login, protocol, host, port_text, remote_root, policy = (
+            user, login, protocol, host, port_text, remote_root = (
                 value.strip() for value in row
             )
             if not valid_name(user) or not valid_name(login):
@@ -199,8 +183,6 @@ def load_sources(path: Path) -> list[Source]:
                 raise ConfigError(f"duplicate logical user on source line {line_number}: {user}")
             if protocol not in {"sftp", "ftps-explicit"}:
                 raise ConfigError(f"unsupported protocol on source line {line_number}: {protocol}")
-            if policy not in {"rudics-broad", "mermaid-selected"}:
-                raise ConfigError(f"unsupported policy on source line {line_number}: {policy}")
             try:
                 port = int(port_text)
             except ValueError as error:
@@ -209,7 +191,7 @@ def load_sources(path: Path) -> list[Source]:
                 ) from error
             if not host or not remote_root or not 1 <= port <= 65535:
                 raise ConfigError(f"invalid endpoint on source line {line_number}")
-            sources.append(Source(user, login, protocol, host, port, remote_root, policy))
+            sources.append(Source(user, login, protocol, host, port, remote_root))
             seen.add(user)
     if not sources:
         raise ConfigError(f"no sources configured in {path}")
@@ -448,7 +430,6 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
                 ("remote", remote),
                 ("remote-root", source.remote_root),
                 ("destination", str(destination)),
-                ("policy", source.policy),
             ):
                 report.write(f"[check] {key}={value}")
             report.write()
