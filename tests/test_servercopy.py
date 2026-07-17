@@ -59,6 +59,33 @@ class LftpCommandTests(unittest.TestCase):
             any(message.startswith("[sync] still-running user=kobeuni") for message in messages)
         )
 
+    def test_lftp_terminates_after_silence_timeout(self) -> None:
+        process = MagicMock()
+
+        def delayed_eof() -> bytes:
+            time.sleep(0.05)
+            return b""
+
+        process.stdout.readline.side_effect = delayed_eof
+        process.wait.return_value = -15
+        report = MagicMock()
+
+        with patch.object(servercopy.subprocess, "Popen", return_value=process):
+            code, lines = servercopy.run_lftp(
+                "lftp",
+                "bye\n",
+                report,
+                "sync",
+                "kobeuni",
+                heartbeat_seconds=0.01,
+                silence_timeout_seconds=0.02,
+            )
+
+        self.assertEqual(code, 124)
+        self.assertEqual(lines, ["lftp timed out after 0s without output; terminating"])
+        process.terminate.assert_called_once_with()
+        report.write.assert_any_call(lines[0], error=True)
+
     def test_lftp_output_redacts_url_credentials(self) -> None:
         output = "get sftp://example-user:fake-password@example.test/file"
 
@@ -100,9 +127,13 @@ class LftpCommandTests(unittest.TestCase):
         self.assertIn('"--dry-run"', script)
         self.assertIn('"--continue"', script)
         self.assertIn('"--no-perms"', script)
-        self.assertIn('"--file=./*.[0-9][0-9][0-9]"', script)
-        self.assertIn('"--file=./*.MER"', script)
-        self.assertNotIn('"--file=./*.cmd"', script)
+        self.assertIn('"--no-recursion"', script)
+        self.assertNotIn('"--no-empty-dirs"', script)
+        self.assertIn('"--include-glob=*.[0-9][0-9][0-9]"', script)
+        self.assertIn('"--include-glob=*.MER"', script)
+        self.assertNotIn('"--include-glob=*.cmd"', script)
+        self.assertNotIn('"--file=', script)
+        self.assertIn('"." "/tmp/servers/s_m0057"', script)
         self.assertIn('echo "[servercopy] step=selected-files patterns=8"', script)
         self.assertEqual(script.count("mirror "), 1)
 
@@ -122,11 +153,21 @@ class LftpCommandTests(unittest.TestCase):
 
         self.assertIn("set ftp:ssl-force yes", script)
         self.assertIn("set ssl:verify-certificate yes", script)
+        self.assertIn("set net:timeout 30s", script)
+        self.assertIn("set net:max-retries 2", script)
+        self.assertIn("set xfer:timeout 5m", script)
+        open_command = script.index("open -u")
+        self.assertLess(script.index("set net:timeout 30s"), open_command)
+        self.assertLess(script.index("set net:max-retries 2"), open_command)
+        self.assertLess(script.index("set xfer:timeout 5m"), open_command)
         self.assertIn('"ftp://taal.unice.fr:21"', script)
         self.assertEqual(script.count("mirror "), 1)
+        exclude = script.index('"--exclude-glob=*"')
         for suffix in servercopy.MIRROR_SUFFIX_GLOBS:
-            self.assertIn(f'"--file=eso/*{suffix}"', script)
-        self.assertIn('"--target-directory=/tmp/servers/eso"', script)
+            include = f'"--include-glob=*{suffix}"'
+            self.assertIn(include, script)
+            self.assertLess(exclude, script.index(include))
+        self.assertIn('"eso" "/tmp/servers/eso"', script)
 
     def test_suffix_reference_matches_top_level_allowlist(self) -> None:
         reference = SCRIPT.parent / "data" / "filename_suffixes.txt"

@@ -98,15 +98,23 @@ vit
 ```
 
 The top-level tuple contains eight glob patterns. A focused test keeps it
-consistent with the compact reference file. `servercopy` passes all patterns to
-one lftp `mirror` command per source, so there is one connection and one mirror
-operation rather than a separate pass for each suffix. Files outside the
-allowlist, including operational dotfiles, tools, backups, and `cmd` files, are
-not selected.
+consistent with the compact reference file. `servercopy` performs one
+nonrecursive directory mirror per source, using lftp's documented repeatable
+include-glob filters for every pattern. A previous attempt to combine repeated
+`mirror --file` globs stalled during live selection against Taal, so the script
+does not rely on that behavior. Files outside the allowlist, including
+operational dotfiles, tools, backups, and `cmd` files, are not selected.
 
 Transfers continue existing partial files, overwrite changed files, do not
 preserve remote permissions, and use up to four parallel transfers. Remote
 files removed from a source do not delete local files.
+
+Individual network protocol waits use a 30-second timeout and receive at most
+two sequential attempts. A transfer with no progress for five minutes also
+times out. These finite limits replace lftp's very large retry and
+transfer-timeout defaults while still allowing one retry after a transient
+research-server failure. As a final bound, `servercopy` terminates lftp and
+records a failure if lftp itself produces no output for five minutes.
 
 RUDICS uses SFTP on the CLS-preferred endpoint
 `rudics.thorium.cls.fr`. The legacy name `iridium-rudics.cls.fr` was checked
@@ -199,8 +207,8 @@ Credential-bearing URL user information emitted by `lftp --dry-run` is replaced
 with `[REDACTED]` before output is written to the terminal or transcript.
 Redacted `lftp` lines are streamed to both destinations as they arrive. If
 `lftp` is silent for 30 seconds, `servercopy` prints a short `still-running`
-line with elapsed and silent time. Selected Taal mirrors print the active file
-extension before each mirror pass.
+line with elapsed and silent time. Each source prints the number of active
+suffix patterns before its single mirror operation.
 
 Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
 a transcript but no ledger rows. Normal runs write both.
@@ -242,7 +250,8 @@ The `_runs` transcript remains the detailed diagnostic record.
 ## Tests
 
 The test suite is intentionally small. It checks generated RUDICS and Taal
-`lftp` commands plus output streaming, redaction, and silence reporting:
+`lftp` commands plus output streaming, redaction, heartbeats, and silence
+termination:
 
 ```sh
 python3.14 -m unittest discover -s tests -v

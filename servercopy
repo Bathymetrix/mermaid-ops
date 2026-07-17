@@ -20,7 +20,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.4.0"
+SERVERCOPY_VERSION = "1.4.1"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -28,7 +28,6 @@ COMMON_OPTIONS = (
     "--continue",
     "--overwrite",
     "--no-perms",
-    "--no-empty-dirs",
     "--parallel=4",
 )
 MIRROR_SUFFIX_GLOBS = (
@@ -43,6 +42,7 @@ MIRROR_SUFFIX_GLOBS = (
 )
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp)://)[^/@\s]+@")
 HEARTBEAT_SECONDS = 30.0
+LFTP_SILENCE_TIMEOUT_SECONDS = 300.0
 LFTP_DIAGNOSTIC_PREFIXES = ("mirror:", "open:", "get:", "put:", "mget:", "pget:")
 
 
@@ -94,17 +94,24 @@ def mirror(arguments: list[str]) -> str:
 def build_lftp_script(source: Source, password: str, destination: Path, preview: bool) -> str:
     """Build lftp input for one source; the password never enters process argv."""
 
+    lines = [
+        "set cmd:fail-exit yes",
+        "set net:timeout 30s",
+        "set net:max-retries 2",
+        "set xfer:timeout 5m",
+    ]
     if source.protocol == "sftp":
-        lines = ["set cmd:fail-exit yes", "set sftp:auto-confirm yes"]
+        lines.append("set sftp:auto-confirm yes")
         url = f"sftp://{source.host}:{source.port}"
     elif source.protocol == "ftps-explicit":
-        lines = [
-            "set cmd:fail-exit yes",
-            "set ftp:ssl-force yes",
-            "set ftp:ssl-protect-data yes",
-            "set ftp:ssl-protect-list yes",
-            "set ssl:verify-certificate yes",
-        ]
+        lines.extend(
+            [
+                "set ftp:ssl-force yes",
+                "set ftp:ssl-protect-data yes",
+                "set ftp:ssl-protect-list yes",
+                "set ssl:verify-certificate yes",
+            ]
+        )
         url = f"ftp://{source.host}:{source.port}"
     else:
         raise ConfigError(f"unsupported protocol for {source.user}: {source.protocol}")
@@ -115,13 +122,19 @@ def build_lftp_script(source: Source, password: str, destination: Path, preview:
     lines.append(
         f"echo {quote(f'[servercopy] step=selected-files patterns={len(MIRROR_SUFFIX_GLOBS)}')}"
     )
+    # The clever repeated --file mirror stalled during a live Taal run. Stick
+    # to one nonrecursive mirror and lftp's documented repeatable include globs
+    # for the operator-maintained suffix allowlist.
     lines.append(
         mirror(
             [
                 *COMMON_OPTIONS,
+                "--no-recursion",
                 *dry_run,
-                *(f"--file={root}/*{suffix}" for suffix in MIRROR_SUFFIX_GLOBS),
-                f"--target-directory={destination}",
+                "--exclude-glob=*",
+                *(f"--include-glob=*{suffix}" for suffix in MIRROR_SUFFIX_GLOBS),
+                root,
+                str(destination),
             ]
         )
     )
@@ -266,6 +279,7 @@ def run_lftp(
     label: str,
     user: str,
     heartbeat_seconds: float = HEARTBEAT_SECONDS,
+    silence_timeout_seconds: float = LFTP_SILENCE_TIMEOUT_SECONDS,
 ) -> tuple[int, list[str]]:
     """Run lftp while streaming redacted lines and reporting silent intervals."""
 
@@ -311,15 +325,35 @@ def run_lftp(
     lines: list[str] = []
     started = time.monotonic()
     last_output = started
+
+    def stop_process() -> None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+    timed_out = False
     try:
         while True:
             try:
                 raw_line = pending.get(timeout=heartbeat_seconds)
             except Empty:
                 now = time.monotonic()
+                silent = now - last_output
+                if silent >= silence_timeout_seconds:
+                    detail = (
+                        f"lftp timed out after {int(silent)}s without output; terminating"
+                    )
+                    report.write(detail, error=True)
+                    lines.append(detail)
+                    timed_out = True
+                    stop_process()
+                    break
                 report.write(
                     f"[{label}] still-running user={user} "
-                    f"elapsed={int(now - started)}s silent={int(now - last_output)}s"
+                    f"elapsed={int(now - started)}s silent={int(silent)}s"
                 )
                 continue
             if raw_line is None:
@@ -331,12 +365,7 @@ def run_lftp(
             lines.append(line)
             last_output = time.monotonic()
     except KeyboardInterrupt:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        stop_process()
         raise
     finally:
         reader.join(timeout=1)
@@ -344,7 +373,7 @@ def run_lftp(
 
     if input_detail:
         lines.append(input_detail)
-    return process.wait(), lines
+    return (124 if timed_out else process.wait()), lines
 
 
 def redact_lftp_output(text: str) -> str:
