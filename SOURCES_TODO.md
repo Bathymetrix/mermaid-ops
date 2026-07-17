@@ -3,41 +3,47 @@
 Use this checklist to track MERMAID accounts and remote sources as they are
 incorporated into the canonical server-copy workflow.
 
-An account or source is complete only after its configuration is validated, a
-remote preview succeeds, a normal mirror succeeds, and its local output is
-verified in the intended destination.
+Check an account or source after its configuration is validated and a remote
+preview succeeds. Track normal-mirror and local-output verification separately
+when they remain pending.
 
 ## Existing CLS/RUDICS accounts to verify
 
 ### General
 
-- [ ] `s_mermaid`
-- [ ] `s_psdmaid`
+- [x] `s_mermaid`
+- [x] `s_psdmaid`
 
 ### JAMSTEC
 
 - [ ] `s_m0056`
-- [ ] `s_m0057`
-- [ ] `s_m0101`
-- [ ] `s_m0102`
+- [x] `s_m0057`
+- [x] `s_m0101`
+- [x] `s_m0102`
 
 ### Brazil
 
 - [ ] `s_m0095@rudics.thorium.cls.fr`
-- [ ] `s_m0096@rudics.thorium.cls.fr`
-- [ ] `s_m0097@rudics.thorium.cls.fr`
-- [ ] `s_m0098@rudics.thorium.cls.fr`
-- [ ] `s_m0099@rudics.thorium.cls.fr`
-- [ ] `s_m0106@rudics.thorium.cls.fr`
-- [ ] `s_m0107@rudics.thorium.cls.fr`
-- [ ] `s_m0108@rudics.thorium.cls.fr`
+- [x] `s_m0096@rudics.thorium.cls.fr`
+- [x] `s_m0097@rudics.thorium.cls.fr`
+- [x] `s_m0098@rudics.thorium.cls.fr`
+- [x] `s_m0099@rudics.thorium.cls.fr`
+- [x] `s_m0106@rudics.thorium.cls.fr`
+- [x] `s_m0107@rudics.thorium.cls.fr`
+- [x] `s_m0108@rudics.thorium.cls.fr`
+
+The full authenticated preview on 2026-07-17 succeeded for 18 of 20
+configured sources. `s_m0056` was rejected at login. `s_m0095` authenticated
+and previewed its remote tree, but an inaccessible remote `tools/` file caused
+the preview to fail. Normal mirrors and local-output verification remain
+pending for all sources.
 
 ## Additional live sources to add
 
-- [ ] ESO at `taal.unice.fr`
+- [x] ESO at `taal.unice.fr`
   - Remote subtree: `eso/`
   - Legacy file selection: `MER`, `LOG`, `BIN`, `cmd`, `out`, and `vit`
-- [ ] Kobe University at `taal.unice.fr`
+- [x] Kobe University at `taal.unice.fr`
   - Remote subtree: `kobeuni/`
   - Legacy file selection: `MER`, `LOG`, `BIN`, `cmd`, `out`, and `vit`
 
@@ -48,13 +54,13 @@ destination for each serial.
 
 - [x] `0030`: external credential filename was misleading; its actual
   `s_m0023` login is encompassed by broad `s_mermaid`.
-- [ ] `0075`
-- [ ] `0076`
-- [ ] `0077`
-- [ ] `0080`
+- [x] `0075`: configured as `s_m0075`; authenticated preview succeeded.
+- [x] `0076`: configured as `s_m0076`; authenticated preview succeeded.
+- [x] `0077`: configured as `s_m0077`; authenticated preview succeeded.
+- [x] `0080`: configured as `s_m0080`; authenticated preview succeeded.
 
-All four accounts authenticated at `rudics.thorium.cls.fr` in a dry-run preview
-on 2026-07-17. Normal mirrors and output verification remain pending.
+All four accounts authenticated at `rudics.thorium.cls.fr` on 2026-07-17.
+Normal mirrors and output verification remain pending.
 
 ## Source reconciliation
 

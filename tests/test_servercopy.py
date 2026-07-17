@@ -5,6 +5,7 @@ from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "servercopy"
@@ -17,6 +18,15 @@ LOADER.exec_module(servercopy)
 
 
 class LftpCommandTests(unittest.TestCase):
+    def test_lftp_output_replaces_invalid_text_bytes(self) -> None:
+        completed = servercopy.subprocess.CompletedProcess(["lftp"], 0, "bad:\ufffd")
+
+        with patch.object(servercopy.subprocess, "run", return_value=completed) as run:
+            code, output = servercopy.run_lftp("lftp", "bye\n")
+
+        self.assertEqual((code, output), (0, "bad:\ufffd"))
+        self.assertEqual(run.call_args.kwargs["errors"], "replace")
+
     def test_lftp_output_redacts_url_credentials(self) -> None:
         output = "get sftp://example-user:fake-password@example.test/file"
 

@@ -17,7 +17,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.3.0"
+SERVERCOPY_VERSION = "1.3.1"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root", "policy")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -276,6 +276,7 @@ def run_lftp(executable: str, script: str) -> tuple[int, str]:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",
             check=False,
         )
         return result.returncode, result.stdout
