@@ -1,0 +1,462 @@
+#!/usr/bin/env python3.14
+"""Mirror configured MERMAID server sources with lftp."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from datetime import UTC, datetime
+import fcntl
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import traceback
+from typing import NamedTuple, TextIO
+
+
+SERVERCOPY_VERSION = "1.1.0"
+SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root", "policy")
+LEDGER_HEADER = "user,result,start,end,ver"
+COMMON_OPTIONS = (
+    "--verbose",
+    "--continue",
+    "--overwrite",
+    "--no-perms",
+    "--no-empty-dirs",
+    "--parallel=4",
+)
+RUDICS_FILTERS = (
+    "--exclude-glob=backups/",
+    "--exclude-glob=backups/*",
+    "--exclude-glob=*/backups/",
+    "--exclude-glob=*/backups/*",
+    "--exclude-glob=*~",
+)
+MERMAID_EXTENSIONS = (".MER", ".LOG", ".BIN", ".cmd", ".out", ".vit")
+
+
+class ConfigError(Exception):
+    pass
+
+
+class Source(NamedTuple):
+    user: str
+    login: str
+    protocol: str
+    host: str
+    port: int
+    remote_root: str
+    policy: str
+
+
+class Reporter:
+    """Write to the terminal and, when enabled, one transcript file."""
+
+    def __init__(self, log_path: Path | None = None) -> None:
+        self.log = log_path.open("a", encoding="utf-8", newline="") if log_path else None
+
+    def close(self) -> None:
+        if self.log:
+            self.log.close()
+
+    def write(self, text: str = "", *, error: bool = False) -> None:
+        message = f"{text}\n"
+        stream: TextIO = sys.stderr if error else sys.stdout
+        stream.write(message)
+        stream.flush()
+        if self.log:
+            self.log.write(message)
+            self.log.flush()
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def quote(value: str) -> str:
+    return f'"{value.replace("\\", "\\\\").replace(chr(34), "\\\"")}"'
+
+
+def mirror(arguments: list[str]) -> str:
+    return "mirror " + " ".join(quote(argument) for argument in arguments)
+
+
+def build_lftp_script(source: Source, password: str, destination: Path, preview: bool) -> str:
+    """Build lftp input for one source; the password never enters process argv."""
+
+    if source.protocol == "sftp":
+        lines = ["set cmd:fail-exit yes", "set sftp:auto-confirm yes"]
+        url = f"sftp://{source.host}:{source.port}"
+    elif source.protocol == "ftps-explicit":
+        lines = [
+            "set cmd:fail-exit yes",
+            "set ftp:ssl-force yes",
+            "set ftp:ssl-protect-data yes",
+            "set ftp:ssl-protect-list yes",
+            "set ssl:verify-certificate yes",
+        ]
+        url = f"ftp://{source.host}:{source.port}"
+    else:
+        raise ConfigError(f"unsupported protocol for {source.user}: {source.protocol}")
+
+    lines.append(f"open -u {quote(source.login)},{quote(password)} {quote(url)}")
+    dry_run = ["--dry-run"] if preview else []
+    if source.policy == "rudics-broad":
+        lines.append(
+            mirror(
+                [
+                    *COMMON_OPTIONS,
+                    *RUDICS_FILTERS,
+                    *dry_run,
+                    source.remote_root,
+                    str(destination),
+                ]
+            )
+        )
+    elif source.policy == "mermaid-selected":
+        root = source.remote_root.rstrip("/")
+        for extension in MERMAID_EXTENSIONS:
+            lines.append(
+                mirror(
+                    [
+                        *COMMON_OPTIONS,
+                        *dry_run,
+                        f"--file={root}/*{extension}",
+                        f"--target-directory={destination}",
+                    ]
+                )
+            )
+    else:
+        raise ConfigError(f"unsupported mirror policy for {source.user}: {source.policy}")
+    return "\n".join([*lines, "bye", ""])
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Mirror configured MERMAID server sources.")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("-c", "--check", action="store_true", help="validate locally only")
+    modes.add_argument("--dry-run", action="store_true", help="preview remote mirrors")
+    parser.add_argument("-u", "--user", metavar="USERS", help="comma-separated logical users")
+    parser.add_argument(
+        "-v", "--version", action="version", version=f"servercopy {SERVERCOPY_VERSION}"
+    )
+    return parser.parse_args(argv)
+
+
+def valid_name(value: str) -> bool:
+    return (
+        bool(value)
+        and value not in {".", ".."}
+        and not any(character in value for character in '/,"\\')
+        and not any(character.isspace() for character in value)
+    )
+
+
+def load_sources(path: Path) -> list[Source]:
+    try:
+        handle = path.open(encoding="ascii", newline="")
+    except OSError as error:
+        raise ConfigError(f"cannot read source registry: {path}: {error}") from error
+
+    sources: list[Source] = []
+    seen: set[str] = set()
+    with handle:
+        reader = csv.reader(handle)
+        if tuple(next(reader, ())) != SOURCE_FIELDS:
+            raise ConfigError(f"unexpected source registry header in {path}")
+        for line_number, row in enumerate(reader, 2):
+            if not row:
+                continue
+            if len(row) != len(SOURCE_FIELDS):
+                raise ConfigError(f"malformed source registry line {line_number} in {path}")
+            user, login, protocol, host, port_text, remote_root, policy = (
+                value.strip() for value in row
+            )
+            if not valid_name(user) or not valid_name(login):
+                raise ConfigError(f"unsafe user or login on source line {line_number}")
+            if user in seen:
+                raise ConfigError(f"duplicate logical user on source line {line_number}: {user}")
+            if protocol not in {"sftp", "ftps-explicit"}:
+                raise ConfigError(f"unsupported protocol on source line {line_number}: {protocol}")
+            if policy not in {"rudics-broad", "mermaid-selected"}:
+                raise ConfigError(f"unsupported policy on source line {line_number}: {policy}")
+            try:
+                port = int(port_text)
+            except ValueError as error:
+                raise ConfigError(
+                    f"invalid port on source line {line_number}: {port_text}"
+                ) from error
+            if not host or not remote_root or not 1 <= port <= 65535:
+                raise ConfigError(f"invalid endpoint on source line {line_number}")
+            sources.append(Source(user, login, protocol, host, port, remote_root, policy))
+            seen.add(user)
+    if not sources:
+        raise ConfigError(f"no sources configured in {path}")
+    return sources
+
+
+def load_credentials(path: Path) -> dict[str, str]:
+    """Read the simple, headerless login,password registry."""
+
+    try:
+        handle = path.open(encoding="utf-8", newline="")
+    except OSError as error:
+        raise ConfigError(f"cannot read credentials file: {path}: {error}") from error
+
+    credentials: dict[str, str] = {}
+    with handle:
+        for line_number, raw in enumerate(handle, 1):
+            line = raw.rstrip("\r\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            fields = line.split(",")
+            if (
+                len(fields) != 2
+                or not valid_name(fields[0])
+                or not fields[1]
+                or '"' in line
+                or "\\" in line
+                or any(character.isspace() for character in fields[1])
+            ):
+                raise ConfigError(f"malformed credentials line {line_number} in {path}")
+            login, password = fields
+            if login in credentials:
+                raise ConfigError(f"duplicate credential login on line {line_number}: {login}")
+            credentials[login] = password
+    if not credentials:
+        raise ConfigError(f"no credentials configured in {path}")
+    return credentials
+
+
+def requested_users(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    users = [item.strip() for item in value.split(",")]
+    if not users or any(not user for user in users):
+        raise ConfigError("--user contains an empty username")
+    return list(dict.fromkeys(users))
+
+
+def prepare_ledger(path: Path) -> None:
+    if not path.exists():
+        path.write_text(f"{LEDGER_HEADER}\n", encoding="ascii")
+        return
+    with path.open(encoding="ascii", newline="") as handle:
+        if handle.readline().rstrip("\r\n") != LEDGER_HEADER:
+            raise ConfigError(f"unexpected run ledger header in {path}")
+
+
+def append_ledger(path: Path, user: str, result: str, start: str, end: str = "") -> None:
+    with path.open("a", encoding="ascii", newline="") as handle:
+        handle.write(f"{user},{result},{start},{end},{SERVERCOPY_VERSION}\n")
+
+
+def remote_url(source: Source) -> str:
+    scheme = "sftp" if source.protocol == "sftp" else "ftp+tls"
+    return f"{scheme}://{source.host}:{source.port}"
+
+
+def run_lftp(executable: str, script: str) -> tuple[int, str]:
+    try:
+        result = subprocess.run(
+            [executable],
+            input=script,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        return result.returncode, result.stdout
+    except OSError as error:
+        return 1, str(error)
+
+
+def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
+    sources_path = Path(__file__).resolve().with_name("servercopy_sources.csv")
+    credentials_path = root / "passwords" / "servercopy_credentials.csv"
+    server_root = root / "servers"
+    ledger = server_root / "_runs" / "servercopy_runs.csv"
+    lftp = shutil.which("lftp")
+    if not lftp:
+        report.write("Error: lftp is required but was not found on PATH.", error=True)
+        return 1
+
+    try:
+        sources = load_sources(sources_path)
+        override = os.environ.get("SFTP_PORT")
+        if override:
+            if not override.isdecimal() or not 1 <= int(override) <= 65535:
+                raise ConfigError("SFTP_PORT must be numeric and between 1 and 65535")
+            sources = [
+                source._replace(port=int(override)) if source.protocol == "sftp" else source
+                for source in sources
+            ]
+        requested = requested_users(args.user)
+        configured = {source.user for source in sources}
+        missing_users = [user for user in requested or [] if user not in configured]
+        if requested is not None:
+            sources = [source for source in sources if source.user in set(requested)]
+        if not sources:
+            raise ConfigError(f"no requested users were found in {sources_path}")
+        credentials = load_credentials(credentials_path)
+        missing_logins = sorted({source.login for source in sources} - credentials.keys())
+        if missing_logins:
+            raise ConfigError("missing credential login(s): " + ",".join(missing_logins))
+        if not args.check and not args.dry_run:
+            prepare_ledger(ledger)
+    except (ConfigError, OSError) as error:
+        report.write(f"Error: {error}", error=True)
+        return 1
+
+    failures: dict[str, list[str]] = {}
+    warnings: list[str] = []
+
+    def output(text: str) -> None:
+        for line in text.splitlines():
+            if line.lower().startswith("warning:"):
+                warnings.append(line)
+            else:
+                report.write(line)
+
+    def fail(user: str, detail: str) -> None:
+        lines: list[str] = []
+        for line in detail.splitlines():
+            if line.lower().startswith("warning:"):
+                warnings.append(line)
+            elif line:
+                lines.append(line)
+        failures[user] = lines
+
+    for source in sources:
+        destination = server_root / source.user
+        start = utc_now()
+        remote = remote_url(source)
+
+        if args.check:
+            for key, value in (
+                ("user", source.user),
+                ("login", source.login),
+                ("remote", remote),
+                ("remote-root", source.remote_root),
+                ("destination", str(destination)),
+                ("policy", source.policy),
+            ):
+                report.write(f"[check] {key}={value}")
+            report.write()
+            if destination.exists() and not destination.is_dir():
+                fail(source.user, f"destination exists but is not a directory: {destination}")
+            continue
+
+        if not args.dry_run:
+            try:
+                destination.mkdir(parents=True, exist_ok=True)
+                if not destination.is_dir():
+                    raise OSError("destination is not a directory")
+            except OSError as error:
+                fail(source.user, f"could not create destination directory: {destination}: {error}")
+                append_ledger(ledger, source.user, "failure", start)
+                continue
+
+        label = "dry-run" if args.dry_run else "sync"
+        report.write(f"[{label}] user={source.user}")
+        report.write(f"[{label}] login={source.login}")
+        report.write(f"[{label}] remote={remote}")
+        report.write(f"[{label}] remote-root={source.remote_root}")
+        report.write(f"[{label}] destination={destination}")
+        report.write(f"[{label}] lftp mirror {'preview' if args.dry_run else 'output'} follows:")
+
+        code, text = run_lftp(
+            lftp,
+            build_lftp_script(source, credentials[source.login], destination, args.dry_run),
+        )
+        if code == 0:
+            output(text)
+            if not args.dry_run:
+                append_ledger(ledger, source.user, "success", start, utc_now())
+        else:
+            fail(source.user, text)
+            if not args.dry_run:
+                append_ledger(ledger, source.user, "failure", start)
+        report.write()
+
+    report.write("##########################################################")
+    warnings.extend(
+        f"Warning: requested user not found in source registry: {user}"
+        for user in missing_users
+    )
+    for warning in warnings:
+        report.write(warning, error=True)
+    if failures:
+        report.write("\nFailures:", error=True)
+        for user, lines in failures.items():
+            report.write(f"  {user}", error=True)
+            for line in lines:
+                report.write(f"    {line}", error=True)
+        return 1
+
+    if args.check:
+        report.write(f"DONE: local check completed for {server_root}")
+    elif args.dry_run:
+        report.write(f"DONE: dry run completed for {server_root}")
+    else:
+        report.write(f"DONE: synced all accounts to {server_root}")
+    report.write("##########################################################")
+    return 0
+
+
+def guarded_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
+    try:
+        return run_workflow(args, root, report)
+    except KeyboardInterrupt:
+        report.write("Error: interrupted.", error=True)
+        return 130
+    except Exception:
+        report.write("Error: unexpected servercopy failure:", error=True)
+        report.write(traceback.format_exc().rstrip(), error=True)
+        return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    if not (mermaid := os.environ.get("MERMAID")):
+        print("Error: MERMAID must be set before running this script.", file=sys.stderr)
+        return 1
+    root = Path(mermaid)
+
+    if args.check:
+        report = Reporter()
+        try:
+            return guarded_workflow(args, root, report)
+        finally:
+            report.close()
+
+    runs = root / "servers" / "_runs"
+    try:
+        runs.mkdir(parents=True, exist_ok=True)
+        lock = (runs / "servercopy.lock").open("a+", encoding="ascii")
+    except OSError as error:
+        print(f"Error: cannot prepare run logging: {error}", file=sys.stderr)
+        return 1
+
+    with lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("Error: another servercopy invocation is already running.", file=sys.stderr)
+            return 1
+        log_path = runs / f"servercopy_{utc_now()}.log"
+        try:
+            report = Reporter(log_path)
+        except OSError as error:
+            print(f"Error: cannot create transcript log: {error}", file=sys.stderr)
+            return 1
+        try:
+            return guarded_workflow(args, root, report)
+        finally:
+            report.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

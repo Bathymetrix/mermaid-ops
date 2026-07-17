@@ -2,201 +2,232 @@
 
 Operational scripts for MERMAID data and server workflows.
 
-These scripts are intentionally small and direct. They are meant for repeatable
-MERMAID operations where destination paths, credentials files, and server
-behavior should be easy to inspect before running.
+The canonical server-copy workflow is the directly executable `servercopy`
+Python script. It mirrors configured remote content into per-user directories,
+records each attempt in an append-only CSV ledger, and writes raw combined
+stdout/stderr transcripts for cron diagnostics. It does not delete local mirror
+files, commit copied data to Git, convert VIT files, or run exports.
 
-## Scripts
+`servercopy_rudics.zsh` remains temporarily available for rollout comparison.
+Remove it after the combined workflow completes a successful RUDICS check,
+remote preview, normal mirror, and output review.
 
-### `servercopy_rudics.zsh`
+## Configuration
 
-Mirror accessible content from RUDICS SFTP accounts into per-user local server
-directories. This workflow skips remote `backups/` directories and files ending
-in `~`, does not delete local files when remote files disappear, and does not
-preserve remote Unix permission bits.
+Non-secret source definitions are stored in the tracked file:
 
-Credentials are read from:
-
-```sh
-$MERMAID/passwords/rudics.csv
+```text
+servercopy_sources.csv
 ```
 
-The credentials file is intentionally simple unquoted CSV with no header row and
-one `user,pass` pair per line. Blank lines and lines beginning with `#` are
-skipped. No quoted CSV parsing is supported. Usernames and passwords that
-contain commas, quotes, backslashes, or whitespace are not supported.
+Columns:
 
-Usernames are used as a single local path component under:
-
-```sh
-$MERMAID/servers/<user>/
+```csv
+user,login,protocol,host,port,remote_root,policy
 ```
 
-Empty usernames, `.`, `..`, and usernames containing `/` are rejected.
+- `user` is the logical server user and local destination name.
+- `login` is the authentication username in the protected credential registry.
+- `protocol` is `sftp` or `ftps-explicit`.
+- `host` and `port` identify the remote endpoint.
+- `remote_root` is the directory or file-group root mirrored for the user.
+- `policy` selects one of the small built-in mirror policies.
 
-Run:
+The logical user and authentication login may differ. This allows `eso` and
+`kobeuni` to use one shared Taal login while retaining distinct destinations:
 
-```sh
-./servercopy_rudics.zsh
+```text
+$MERMAID/servers/eso/
+$MERMAID/servers/kobeuni/
 ```
 
-Check local configuration without contacting RUDICS:
+The checked-in Taal rows use `taal_login` as a placeholder. Replace it in
+`servercopy_sources.csv` with the real, non-secret authentication username
+before running all configured sources.
 
-```sh
-./servercopy_rudics.zsh --check
-./servercopy_rudics.zsh -c
+## Credentials
+
+Credentials are read at runtime from:
+
+```text
+$MERMAID/passwords/servercopy_credentials.csv
 ```
 
-Preview remote mirror operations through `lftp`:
+The file is intentionally simple unquoted CSV with no header row and one
+`login,password` pair per line:
 
-```sh
-./servercopy_rudics.zsh --dry-run
+```csv
+s_m0057,example-not-a-real-password
+taal_login,another-example-not-a-real-password
 ```
 
-Process only selected configured users:
+Blank lines and lines beginning with `#` are skipped. Logins and passwords that
+contain commas, quotes, backslashes, or whitespace are not supported. The
+credential file must not be committed, printed, copied into transcripts, or
+passed to `lftp` as a process argument.
 
-```sh
-./servercopy_rudics.zsh --user foo,bar
-./servercopy_rudics.zsh --user=foo,bar
-./servercopy_rudics.zsh -u foo,bar
-```
+Multiple source rows may refer to the same login, so shared passwords appear
+only once in the protected file.
 
-User filtering accepts a comma-separated list of usernames and trims whitespace
-around names. It only changes which configured users from
-`$MERMAID/passwords/rudics.csv` are processed.
+For the initial migration, carry the existing RUDICS `login,password` rows into
+the new credential registry unchanged, then add the one shared Taal login. This
+is an operator-managed credential step; `servercopy` does not import, rewrite,
+or print credentials.
 
-Check selected users without contacting remote servers:
+## Mirror policies
 
-```sh
-./servercopy_rudics.zsh --check --user foo,bar
-./servercopy_rudics.zsh -c -u foo,bar
-```
-
-Preview selected users through `lftp`:
-
-```sh
-./servercopy_rudics.zsh --dry-run --user foo,bar
-```
-
-Show help or version:
-
-```sh
-./servercopy_rudics.zsh --help
-./servercopy_rudics.zsh -h
-./servercopy_rudics.zsh --version
-./servercopy_rudics.zsh -v
-```
-
-The workflow mirrors accessible remote content from each account into:
-
-```sh
-$MERMAID/servers/<user>/
-```
-
-Excluded remote content:
+`rudics-broad` preserves the current RUDICS behavior. It mirrors accessible
+remote content using continuing, overwriting, non-permission-preserving,
+four-way parallel transfers while excluding:
 
 ```text
 backups/
 *~
 ```
 
-The workflow does not delete local files that are absent remotely and keeps
-incremental mirror behavior with `--continue`. Remote Unix permission bits are
-intentionally not preserved; this is an operational mirror, not a
-permission-preserving filesystem archive.
+Remote files removed from RUDICS do not delete local files.
 
-After changing the policy, run:
+`mermaid-selected` is used for the ESO and Kobe subtrees on `taal.unice.fr`.
+It mirrors these file extensions into each logical user's destination:
 
-```sh
-./servercopy_rudics.zsh --dry-run
+```text
+MER
+LOG
+BIN
+cmd
+out
+vit
 ```
 
-before running a normal mirror.
+RUDICS uses SFTP on the CLS-preferred endpoint
+`rudics.thorium.cls.fr`. The legacy name `iridium-rudics.cls.fr` was checked
+without authentication on 2026-07-16; both names resolved through the same
+canonical CLS hostname and presented identical RSA and ECDSA SSH host keys.
+Use the preferred name and recheck DNS and host identity if CLS announces a
+migration.
+
+Taal uses explicit FTPS on port 21. TLS is required, data and directory-listing
+connections are protected, and the server certificate is verified.
+
+## Usage
+
+Normal mirror of all configured users:
+
+```sh
+./servercopy
+```
+
+Validate local configuration without contacting a remote or creating files:
+
+```sh
+./servercopy --check
+./servercopy -c
+```
+
+Authenticate and preview remote mirror operations without transferring files:
+
+```sh
+./servercopy --dry-run
+```
+
+Process only selected logical users:
+
+```sh
+./servercopy --user s_m0057,eso
+./servercopy --user=s_m0057,eso
+./servercopy -u s_m0057,eso
+```
+
+User filtering works with normal, check, and dry-run modes. Show help or the
+operational version with:
+
+```sh
+./servercopy --help
+./servercopy --version
+```
+
+`SFTP_PORT` may override the configured port for all SFTP sources and must be a
+number from 1 through 65535. It does not affect FTPS sources.
 
 ## Run ledger
 
-The script maintains a single append-only UTC run ledger under:
+Normal runs append one row per attempted logical user to:
 
-```sh
-$MERMAID/servers/_runs/
+```text
+$MERMAID/servers/_runs/servercopy_runs.csv
 ```
 
-Ledger file:
-
-```sh
-$MERMAID/servers/_runs/servercopy_rudics_runs.csv
-```
-
-Columns:
+The ledger retains the existing format:
 
 ```csv
 user,result,start,end,ver
 ```
 
-The `ver` column records the current `SERVERCOPY_RUDICS_VERSION` value for each
-appended row. This script-level version is lightweight operational provenance,
-not a package release system.
+Allowed results are `success` and `failure`. Successful rows include UTC start
+and end times. Failed rows intentionally leave `end` empty. `ver` records the
+`servercopy` operational version.
 
-Successful rows populate `end` with the UTC finish time. Failed rows
-intentionally leave `end` blank.
+Existing `servercopy_rudics_runs.csv` and RUDICS transcript logs are left
+untouched. The combined workflow starts a new ledger rather than rewriting or
+renaming historical output.
 
-Allowed result values are `success` and `failure`. `failure` is intentionally
-broad for now: login/authentication failures, DNS failures, connection failures,
-interrupted transfers, permission failures, local filesystem failures, and other
-per-user mirror failures all use `failure`.
+## Transcript logs and failures
 
-## Transcript logs
+Every normal or dry-run invocation writes one raw combined stdout/stderr log:
 
-Each normal or dry-run invocation writes one raw combined stdout/stderr
-transcript log under:
-
-```sh
-$MERMAID/servers/_runs/
+```text
+$MERMAID/servers/_runs/servercopy_<UTC>.log
 ```
 
-Transcript filenames use the invocation UTC timestamp:
+Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
+a transcript but no ledger rows. Normal runs write both.
+
+An individual source failure does not prevent later sources from running. The
+script prints a failure summary and exits nonzero if any selected source fails.
+Successful all-source runs exit zero. Missing or malformed local configuration
+also exits nonzero before transfer attempts begin.
+
+An advisory lock at `$MERMAID/servers/_runs/servercopy.lock` prevents overlapping
+normal and dry-run invocations. This is intended for unattended cron use.
+
+## Cron
+
+Cron must provide `MERMAID` and a `PATH` containing Python 3.14 and `lftp`. For
+the current Homebrew installation, the command environment can use:
 
 ```sh
-servercopy_rudics_<UTC>.log
+MERMAID=/Users/jdsimon/mermaid
+PATH=/opt/homebrew/bin:/usr/bin:/bin
+/Users/jdsimon/programs/mermaid-ops/servercopy
 ```
 
-These logs are raw operational/debug evidence only. They are not parsed or used
-to classify failures. Check mode does not create transcript logs.
-
-## Check vs dry-run
-
-`--check` / `-c` performs local validation and prints the intended user, remote
-endpoint, and destination for each configured account. Check mode does not:
-- contact remote servers
-- authenticate
-- transfer files
-- create directories or files
-- append to `_runs`
-- create transcript logs
-
-When combined with `--user`, output is limited to selected configured users.
-
-`--dry-run` contacts and authenticates to RUDICS for each selected account and
-lets `lftp mirror --dry-run` print the operations it would perform. Dry-run mode
-transfers nothing, writes a transcript log, and does not append to `_runs`.
-
-`--dry-run` is not offline. Use `--check` or `-c` for offline/local validation.
+Keep cron's own mail or redirection enabled as an additional alerting channel.
+The `_runs` transcript remains the detailed diagnostic record.
 
 ## Requirements
 
-- `zsh`
+- Python 3.14
 - `lftp`
 - `MERMAID` set in the environment
-- Unified RUDICS credentials CSV at `$MERMAID/passwords/rudics.csv`
-- Optional `SFTP_PORT` override must be numeric
+- Readable `servercopy_sources.csv` beside the executable
+- Readable protected credentials at the configured path
 
-## Safety Notes
+## Tests
 
-- Scripts may touch live MERMAID server data.
-- Credentials files should never be committed.
-- Check destination paths before running a script for the first time.
-- `servercopy_rudics.zsh` mirrors accessible remote content into
-  `$MERMAID/servers/<user>/`.
-- Remote `backups/` directories and files ending in `~` are skipped.
-- Remote deletions do not delete local files.
-- The run ledger is append-only and is not rewritten or truncated.
+The test suite is intentionally small. It checks only the generated RUDICS and
+Taal `lftp` commands:
+
+```sh
+python3.14 -m unittest discover -s tests -v
+```
+
+The tests use fake credentials and do not contact remote servers.
+
+## Safety notes
+
+- Check the source registry and destination mapping before the first run.
+- Run `--check`, then `--dry-run`, before the first normal combined mirror.
+- Normal mirrors may modify files beneath `$MERMAID/servers/<user>/`.
+- Remote deletions do not remove local files.
+- Credentials, generated server data, and local sync output must not be
+  committed.
