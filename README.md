@@ -182,7 +182,7 @@ renaming historical output.
 
 ## Transcript logs and failures
 
-Every normal or dry-run invocation writes one raw combined stdout/stderr log:
+Every normal or dry-run invocation writes one combined stdout/stderr log:
 
 ```text
 <output>/_runs/servercopy_<UTC>.log
@@ -190,14 +190,20 @@ Every normal or dry-run invocation writes one raw combined stdout/stderr log:
 
 Credential-bearing URL user information emitted by `lftp --dry-run` is replaced
 with `[REDACTED]` before output is written to the terminal or transcript.
+Redacted `lftp` lines are streamed to both destinations as they arrive. If
+`lftp` is silent for 30 seconds, `servercopy` prints a short `still-running`
+line with elapsed and silent time. Selected Taal mirrors print the active file
+extension before each mirror pass.
 
 Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
 a transcript but no ledger rows. Normal runs write both.
 
 An individual source failure does not prevent later sources from running. The
-script prints a failure summary and exits nonzero if any selected source fails.
-Successful all-source runs exit zero. Missing or malformed local configuration
-also exits nonzero before transfer attempts begin.
+script prints the source result and lftp exit status immediately, then prints a
+compact final failure summary containing diagnostic lines rather than replaying
+all transfer output. It exits nonzero if any selected source fails. Successful
+all-source runs exit zero. Missing or malformed local configuration also exits
+nonzero before transfer attempts begin.
 
 An advisory lock at `<output>/_runs/servercopy.lock` prevents overlapping normal
 and dry-run invocations. This is intended for unattended cron use.
@@ -228,8 +234,8 @@ The `_runs` transcript remains the detailed diagnostic record.
 
 ## Tests
 
-The test suite is intentionally small. It checks only the generated RUDICS and
-Taal `lftp` commands:
+The test suite is intentionally small. It checks generated RUDICS and Taal
+`lftp` commands plus output streaming, redaction, and silence reporting:
 
 ```sh
 python3.14 -m unittest discover -s tests -v

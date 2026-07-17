@@ -9,15 +9,18 @@ from datetime import UTC, datetime
 import fcntl
 import os
 from pathlib import Path
+from queue import Empty, Queue
 import re
 import shutil
 import subprocess
 import sys
+from threading import Thread
+import time
 import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.3.1"
+SERVERCOPY_VERSION = "1.4.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root", "policy")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -37,6 +40,8 @@ RUDICS_FILTERS = (
 )
 MERMAID_EXTENSIONS = (".MER", ".LOG", ".BIN", ".cmd", ".out", ".vit")
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp)://)[^/@\s]+@")
+HEARTBEAT_SECONDS = 30.0
+LFTP_DIAGNOSTIC_PREFIXES = ("mirror:", "open:", "get:", "put:", "mget:", "pget:")
 
 
 class ConfigError(Exception):
@@ -106,6 +111,7 @@ def build_lftp_script(source: Source, password: str, destination: Path, preview:
     lines.append(f"open -u {quote(source.login)},{quote(password)} {quote(url)}")
     dry_run = ["--dry-run"] if preview else []
     if source.policy == "rudics-broad":
+        lines.append(f"echo {quote('[servercopy] step=rudics-broad')}")
         lines.append(
             mirror(
                 [
@@ -120,6 +126,9 @@ def build_lftp_script(source: Source, password: str, destination: Path, preview:
     elif source.policy == "mermaid-selected":
         root = source.remote_root.rstrip("/")
         for extension in MERMAID_EXTENSIONS:
+            lines.append(
+                f"echo {quote(f'[servercopy] step=mermaid-selected extension={extension}')}"
+            )
             lines.append(
                 mirror(
                     [
@@ -268,24 +277,114 @@ def remote_url(source: Source) -> str:
     return f"{scheme}://{source.host}:{source.port}"
 
 
-def run_lftp(executable: str, script: str) -> tuple[int, str]:
+def run_lftp(
+    executable: str,
+    script: str,
+    report: Reporter,
+    label: str,
+    user: str,
+    heartbeat_seconds: float = HEARTBEAT_SECONDS,
+) -> tuple[int, list[str]]:
+    """Run lftp while streaming redacted lines and reporting silent intervals."""
+
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [executable],
-            input=script,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
-            check=False,
         )
-        return result.returncode, result.stdout
     except OSError as error:
-        return 1, str(error)
+        detail = f"could not start lftp: {error}"
+        report.write(detail, error=True)
+        return 1, [detail]
+
+    assert process.stdin is not None
+    assert process.stdout is not None
+    pending: Queue[bytes | None] = Queue()
+
+    def read_output() -> None:
+        try:
+            for raw_line in iter(process.stdout.readline, b""):
+                pending.put(raw_line)
+        finally:
+            pending.put(None)
+
+    reader = Thread(target=read_output, name="servercopy-lftp-output", daemon=True)
+    reader.start()
+    input_detail: str | None = None
+    try:
+        process.stdin.write(script.encode("utf-8"))
+    except OSError as error:
+        input_detail = f"could not send lftp commands: {error}"
+        report.write(input_detail, error=True)
+    finally:
+        try:
+            process.stdin.close()
+        except OSError as error:
+            if input_detail is None:
+                input_detail = f"could not close lftp input: {error}"
+                report.write(input_detail, error=True)
+
+    lines: list[str] = []
+    started = time.monotonic()
+    last_output = started
+    try:
+        while True:
+            try:
+                raw_line = pending.get(timeout=heartbeat_seconds)
+            except Empty:
+                now = time.monotonic()
+                report.write(
+                    f"[{label}] still-running user={user} "
+                    f"elapsed={int(now - started)}s silent={int(now - last_output)}s"
+                )
+                continue
+            if raw_line is None:
+                break
+            line = redact_lftp_output(
+                raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+            )
+            report.write(line)
+            lines.append(line)
+            last_output = time.monotonic()
+    except KeyboardInterrupt:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        reader.join(timeout=1)
+        process.stdout.close()
+
+    if input_detail:
+        lines.append(input_detail)
+    return process.wait(), lines
 
 
 def redact_lftp_output(text: str) -> str:
     return CREDENTIAL_URL.sub(r"\1[REDACTED]@", text)
+
+
+def lftp_failure_detail(code: int, lines: list[str]) -> str:
+    diagnostics = [
+        line
+        for line in lines
+        if line.lower().startswith(LFTP_DIAGNOSTIC_PREFIXES)
+        or any(
+            word in line.lower()
+            for word in ("error", "failed", "denied", "illegal", "refused", "timed out")
+        )
+    ]
+    detail = [f"lftp exit status {code}"]
+    if diagnostics:
+        detail.extend(diagnostics[-10:])
+    else:
+        detail.append("no diagnostic line; see inline lftp output")
+    return "\n".join(detail)
 
 
 def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
@@ -327,13 +426,6 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
 
     failures: dict[str, list[str]] = {}
     warnings: list[str] = []
-
-    def output(text: str) -> None:
-        for line in text.splitlines():
-            if line.lower().startswith("warning:"):
-                warnings.append(line)
-            else:
-                report.write(line)
 
     def fail(user: str, detail: str) -> None:
         lines: list[str] = []
@@ -382,17 +474,29 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         report.write(f"[{label}] destination={destination}")
         report.write(f"[{label}] lftp mirror {'preview' if args.dry_run else 'output'} follows:")
 
-        code, text = run_lftp(
+        lftp_started = time.monotonic()
+        code, lines = run_lftp(
             lftp,
             build_lftp_script(source, credentials[source.login], destination, args.dry_run),
+            report,
+            label,
+            source.user,
         )
-        text = redact_lftp_output(text)
+        warnings.extend(
+            f"Warning: {source.user}: {line.removeprefix('Warning:').lstrip()}"
+            for line in lines
+            if line.lower().startswith("warning:")
+        )
+        result = "success" if code == 0 else "failure"
+        report.write(
+            f"[{label}] result={result} user={source.user} "
+            f"lftp-exit={code} elapsed={int(time.monotonic() - lftp_started)}s"
+        )
         if code == 0:
-            output(text)
             if not args.dry_run:
                 append_ledger(ledger, source.user, "success", start, utc_now())
         else:
-            fail(source.user, text)
+            fail(source.user, lftp_failure_detail(code, lines))
             if not args.dry_run:
                 append_ledger(ledger, source.user, "failure", start)
         report.write()
