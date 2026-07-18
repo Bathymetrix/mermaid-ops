@@ -32,63 +32,64 @@ def taal_source(user: str = "eso") -> servercopy.Source:
     )
 
 
-class SuffixAllowlistTests(unittest.TestCase):
-    def test_parses_comments_blank_lines_and_numeric_glob(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "suffixes.txt"
-            path.write_text(
-                "# comment\n\n[0-9][0-9][0-9]\n   # another comment\nMER\nvit\n",
-                encoding="ascii",
-            )
-
-            suffixes = servercopy.load_suffix_globs(path)
-
-        self.assertEqual(suffixes, (".[0-9][0-9][0-9]", ".MER", ".vit"))
-
-    def test_rejects_malformed_duplicate_and_empty_allowlists(self) -> None:
-        invalid_contents = (
-            "",
-            "# comments only\n",
-            ".MER\n",
-            "*.MER\n",
-            "MER extra\n",
-            "foo/bar\n",
-            "MER\nMER\n",
+class SequentialMirrorTests(unittest.TestCase):
+    def test_authoritative_suffix_tuple_is_hardcoded_in_required_order(self) -> None:
+        self.assertEqual(
+            servercopy.SYNC_SUFFIXES,
+            (".MER", ".LOG", ".BIN", ".cmd", ".out", ".vit", ".S41", ".S61"),
         )
-        for content in invalid_contents:
-            with self.subTest(content=content), TemporaryDirectory() as temp_dir:
-                path = Path(temp_dir) / "suffixes.txt"
-                path.write_text(content, encoding="ascii")
-                with self.assertRaises(servercopy.ConfigError):
-                    servercopy.load_suffix_globs(path)
+        self.assertFalse(hasattr(servercopy, "SUFFIX_ALLOWLIST"))
+        self.assertFalse(hasattr(servercopy, "load_suffix_globs"))
 
-    def test_runtime_file_drives_generated_include_globs(self) -> None:
-        with TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "suffixes.txt"
-            path.write_text("ABC\n[0-9][0-9][0-9]\n", encoding="ascii")
-            suffixes = servercopy.load_suffix_globs(path)
+    def test_one_ordered_file_mirror_per_suffix_uses_remote_root(self) -> None:
+        for user in ("eso", "kobeuni"):
+            with self.subTest(user=user):
+                script = servercopy.build_lftp_script(
+                    taal_source(user),
+                    "fake-password",
+                    Path(f"/tmp/servers/{user}"),
+                    False,
+                )
+                mirrors = [
+                    line for line in script.splitlines() if line.startswith("mirror ")
+                ]
+                expected = [
+                    f'mirror "-c" "-f" "{user}/*{suffix}"'
+                    for suffix in servercopy.SYNC_SUFFIXES
+                ]
 
+                self.assertEqual(mirrors, expected)
+                self.assertEqual(script.count("open -u "), 1)
+                self.assertEqual(script.count("set cmd:fail-exit yes"), 1)
+                self.assertEqual(script.count("bye"), 1)
+                self.assertIn(f'lcd "/tmp/servers/{user}"', script)
+                self.assertNotIn("include-glob", script)
+                self.assertNotIn("exclude-glob", script)
+                self.assertNotIn("--parallel", script)
+                self.assertNotIn("--overwrite", script)
+
+    def test_each_mirror_has_a_visible_suffix_marker(self) -> None:
         script = servercopy.build_lftp_script(
-            taal_source(),
-            "fake-password",
-            Path("/tmp/servers/eso"),
-            True,
-            suffixes,
+            taal_source(), "fake-password", Path("/tmp/servers/eso"), True
         )
 
-        self.assertIn('"--include-glob=*.ABC"', script)
-        self.assertIn('"--include-glob=*.[0-9][0-9][0-9]"', script)
-        self.assertNotIn('"--include-glob=*.MER"', script)
-        self.assertIn("patterns=2", script)
-
-    def test_tracked_allowlist_loads(self) -> None:
-        suffixes = servercopy.load_suffix_globs(servercopy.SUFFIX_ALLOWLIST)
-
-        self.assertEqual(len(suffixes), 8)
-        self.assertEqual(suffixes[0], ".[0-9][0-9][0-9]")
+        markers = [
+            line for line in script.splitlines() if "step=mirror suffix=" in line
+        ]
+        self.assertEqual(
+            markers,
+            [
+                f'echo "[servercopy] step=mirror suffix={suffix}"'
+                for suffix in servercopy.SYNC_SUFFIXES
+            ],
+        )
+        self.assertEqual(script.count('"--dry-run"'), len(servercopy.SYNC_SUFFIXES))
 
 
 class LftpRunnerTests(unittest.TestCase):
+    def test_default_silence_watchdog_is_fifteen_minutes(self) -> None:
+        self.assertEqual(servercopy.LFTP_SILENCE_TIMEOUT_SECONDS, 900.0)
+
     def test_lftp_output_replaces_invalid_text_bytes(self) -> None:
         process = MagicMock()
         process.stdout.readline.side_effect = [b"bad:\xff\n", b""]
@@ -124,6 +125,32 @@ class LftpRunnerTests(unittest.TestCase):
         self.assertEqual((code, lines), (0, []))
         messages = [call.args[0] for call in report.write.call_args_list]
         self.assertTrue(any(message.startswith("[sync] still-running") for message in messages))
+
+    def test_lftp_heartbeat_identifies_active_suffix(self) -> None:
+        process = MagicMock()
+        output_count = 0
+
+        def marker_then_delayed_eof() -> bytes:
+            nonlocal output_count
+            output_count += 1
+            if output_count == 1:
+                return b"[servercopy] step=mirror suffix=.LOG\n"
+            time.sleep(0.03)
+            return b""
+
+        process.stdout.readline.side_effect = marker_then_delayed_eof
+        process.wait.return_value = 0
+        report = MagicMock()
+
+        with patch.object(servercopy.subprocess, "Popen", return_value=process):
+            servercopy.run_lftp(
+                "lftp", "bye\n", report, "sync", "eso", heartbeat_seconds=0.01
+            )
+
+        messages = [call.args[0] for call in report.write.call_args_list]
+        self.assertTrue(
+            any("still-running user=eso suffix=.LOG" in message for message in messages)
+        )
 
     def test_lftp_watchdog_returns_124(self) -> None:
         process = MagicMock()
@@ -239,10 +266,19 @@ class CommandTests(unittest.TestCase):
     def test_failure_detail_keeps_diagnostics_not_transfer_chatter(self) -> None:
         detail = servercopy.lftp_failure_detail(
             1,
-            ["Transferring file `one.MER'", "cls: Access failed"],
+            [
+                "[servercopy] step=mirror suffix=.MER",
+                "Transferring file `one.MER'",
+                "cls: Access failed",
+            ],
         )
 
-        self.assertEqual(detail, "lftp exit status 1\ncls: Access failed")
+        self.assertEqual(
+            detail,
+            "lftp exit status 1\n"
+            "[servercopy] step=mirror suffix=.MER\n"
+            "cls: Access failed",
+        )
 
 
 class ListingWorkflowTests(unittest.TestCase):
@@ -265,7 +301,6 @@ class ListingWorkflowTests(unittest.TestCase):
         with (
             patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
             patch.object(servercopy, "load_sources", return_value=[taal_source()]),
-            patch.object(servercopy, "load_suffix_globs", return_value=(".MER",)),
             patch.object(
                 servercopy,
                 "load_credentials",
@@ -295,7 +330,7 @@ class ListingWorkflowTests(unittest.TestCase):
                 "listing succeeded",
             ),
             ((1, ["cls: Access failed"]), 1, "listing failed"),
-            ((124, ["lftp timed out after 300s"]), 1, "listing timed out"),
+            ((124, ["lftp timed out after 900s"]), 1, "listing timed out"),
         )
         for lftp_result, expected_code, message in cases:
             with self.subTest(message=message), TemporaryDirectory() as temp_dir:

@@ -20,21 +20,26 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.4.1"
+SERVERCOPY_VERSION = "1.5.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
-COMMON_OPTIONS = (
-    "--verbose",
-    "--continue",
-    "--overwrite",
-    "--no-perms",
-    "--parallel=4",
+MIRROR_FILE_OPTIONS = (
+    "-c",
+    "-f",
 )
-SUFFIX_ALLOWLIST = Path(__file__).resolve().parent / "data" / "filename_suffixes.txt"
-SUFFIX_ENTRY = re.compile(r"(?:[A-Za-z0-9]+|(?:\[0-9\])+)$")
+SYNC_SUFFIXES = (
+    ".MER",
+    ".LOG",
+    ".BIN",
+    ".cmd",
+    ".out",
+    ".vit",
+    ".S41",
+    ".S61",
+)
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
 HEARTBEAT_SECONDS = 30.0
-LFTP_SILENCE_TIMEOUT_SECONDS = 300.0
+LFTP_SILENCE_TIMEOUT_SECONDS = 900.0
 LISTING_BEGIN_MARKER = "[servercopy] listing-begin"
 LISTING_END_MARKER = "[servercopy] listing-end"
 LFTP_DIAGNOSTIC_PREFIXES = (
@@ -92,12 +97,9 @@ def build_lftp_script(
     password: str,
     destination: Path,
     preview: bool,
-    suffix_globs: tuple[str, ...],
 ) -> str:
     """Build lftp input for one source; the password never enters process argv."""
 
-    if not suffix_globs:
-        raise ConfigError("filename suffix allowlist is empty")
     lines = [
         "set cmd:fail-exit yes",
         "set net:timeout 30s",
@@ -121,27 +123,19 @@ def build_lftp_script(
         raise ConfigError(f"unsupported protocol for {source.user}: {source.protocol}")
 
     lines.append(f"open -u {quote(source.login)},{quote(password)} {quote(url)}")
-    dry_run = ["--dry-run"] if preview else []
+    lines.append(f"lcd {quote(str(destination))}")
     root = source.remote_root.rstrip("/") or "."
-    lines.append(
-        f"echo {quote(f'[servercopy] step=selected-files patterns={len(suffix_globs)}')}"
-    )
-    # The clever repeated --file mirror stalled during a live Taal run. Stick
-    # to one nonrecursive mirror and lftp's documented repeatable include globs
-    # for the operator-maintained suffix allowlist.
-    lines.append(
-        mirror(
-            [
-                *COMMON_OPTIONS,
-                "--no-recursion",
-                *dry_run,
-                "--exclude-glob=*",
-                *(f"--include-glob=*{suffix}" for suffix in suffix_globs),
-                root,
-                str(destination),
-            ]
+    for suffix in SYNC_SUFFIXES:
+        lines.append(f"echo {quote(f'[servercopy] step=mirror suffix={suffix}')}")
+        lines.append(
+            mirror(
+                [
+                    *MIRROR_FILE_OPTIONS,
+                    *(["--dry-run"] if preview else []),
+                    f"{root}/*{suffix}",
+                ]
+            )
         )
-    )
     return "\n".join([*lines, "bye", ""])
 
 
@@ -265,29 +259,6 @@ def load_sources(path: Path) -> list[Source]:
     return sources
 
 
-def load_suffix_globs(path: Path) -> tuple[str, ...]:
-    try:
-        lines = path.read_text(encoding="ascii").splitlines()
-    except (OSError, UnicodeError) as error:
-        raise ConfigError(f"cannot read filename suffix allowlist: {path}: {error}") from error
-
-    suffixes: list[str] = []
-    seen: set[str] = set()
-    for line_number, line in enumerate(lines, 1):
-        value = line.strip()
-        if not value or value.startswith("#"):
-            continue
-        if not SUFFIX_ENTRY.fullmatch(value):
-            raise ConfigError(f"malformed filename suffix line {line_number} in {path}")
-        if value in seen:
-            raise ConfigError(f"duplicate filename suffix on line {line_number}: {value}")
-        suffixes.append(f".{value}")
-        seen.add(value)
-    if not suffixes:
-        raise ConfigError(f"no filename suffixes configured in {path}")
-    return tuple(suffixes)
-
-
 def load_credentials(path: Path) -> dict[str, str]:
     """Read the simple, headerless login,password registry."""
 
@@ -403,6 +374,7 @@ def run_lftp(
     lines: list[str] = []
     started = time.monotonic()
     last_output = started
+    active_suffix: str | None = None
 
     def stop_process() -> None:
         process.terminate()
@@ -431,6 +403,7 @@ def run_lftp(
                     break
                 report.write(
                     f"[{label}] still-running user={user} "
+                    f"{f'suffix={active_suffix} ' if active_suffix else ''}"
                     f"elapsed={int(now - started)}s silent={int(silent)}s"
                 )
                 continue
@@ -441,6 +414,8 @@ def run_lftp(
             )
             report.write(line)
             lines.append(line)
+            if line.startswith("[servercopy] step=mirror suffix="):
+                active_suffix = line.partition("suffix=")[2]
             last_output = time.monotonic()
     except KeyboardInterrupt:
         stop_process()
@@ -469,6 +444,16 @@ def lftp_failure_detail(code: int, lines: list[str]) -> str:
         )
     ]
     detail = [f"lftp exit status {code}"]
+    active_step = next(
+        (
+            line
+            for line in reversed(lines)
+            if line.startswith("[servercopy] step=mirror suffix=")
+        ),
+        None,
+    )
+    if active_step:
+        detail.append(active_step)
     if diagnostics:
         detail.extend(diagnostics[-10:])
     else:
@@ -497,7 +482,6 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
 
     try:
         sources = load_sources(sources_path)
-        suffix_globs = () if args.diagnose_listing else load_suffix_globs(SUFFIX_ALLOWLIST)
         override = os.environ.get("SFTP_PORT")
         if override:
             if not override.isdecimal() or not 1 <= int(override) <= 65535:
@@ -627,7 +611,6 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
                 credentials[source.login],
                 destination,
                 args.dry_run,
-                suffix_globs,
             ),
             report,
             label,

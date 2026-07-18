@@ -77,48 +77,77 @@ or print credentials.
 
 ## Filename selection
 
-Every RUDICS and Taal source uses the same filename-suffix allowlist. The
-compact reference list is tracked in:
+Every source uses one authoritative suffix tuple hardcoded in `servercopy`:
 
 ```text
-data/filename_suffixes.txt
+.MER .LOG .BIN .cmd .out .vit .S41 .S61
 ```
 
-`[0-9][0-9][0-9]` is an lftp glob matching exactly the three-digit suffixes
-`.000` through `.999` that actually exist. The remaining allowed suffixes are:
+Case is significant. For each source, one authenticated lftp session changes
+to `<output>/<user>/` and runs one command per suffix, in the listed order:
 
 ```text
-BIN
-LOG
-MER
-S41
-S61
-out
-vit
+mirror -c -f <remote_root>/*.MER
+mirror -c -f <remote_root>/*.LOG
+mirror -c -f <remote_root>/*.BIN
+mirror -c -f <remote_root>/*.cmd
+mirror -c -f <remote_root>/*.out
+mirror -c -f <remote_root>/*.vit
+mirror -c -f <remote_root>/*.S41
+mirror -c -f <remote_root>/*.S61
 ```
 
-This file is the authoritative runtime allowlist; the Python script does not
-contain a second suffix list. Blank lines and full-line `#` comments are
-allowed. Malformed, duplicate, unreadable, and empty allowlists fail before
-lftp starts.
+The installed lftp 4.9.2 manual defines `-c` as continuing a mirror job when
+possible and `-f FILE` as mirroring one file or globbed group, with
+`/path/to/*.txt` as its example. Thus each generated command has the same
+semantics as the proven historical invocation. `cmd:fail-exit yes` stops the
+session at a failed suffix, and the marker immediately before each command
+identifies the active suffix in output and failure reports.
 
-`servercopy` performs one nonrecursive directory mirror per source, using
-lftp's repeatable include-glob filters in the file's order. A previous attempt
-to combine repeated `mirror --file` globs stalled during live selection against
-Taal, so the script does not rely on that behavior. Files outside the
-allowlist, including operational dotfiles, tools, backups, and `cmd` files, are
-not selected.
+Files outside the hardcoded suffix tuple, including operational dotfiles,
+tools, and backups, are not selected. Remote files removed from a source do not
+delete local files.
 
-Transfers continue existing partial files, overwrite changed files, do not
-preserve remote permissions, and use up to four parallel transfers. Remote
-files removed from a source do not delete local files.
+### Why the mirror commands are sequential
+
+The older external implementation used explicit commands such as
+`mirror -c -f kobeuni/*.MER`, `mirror -c -f kobeuni/*.LOG`, and so on. A newer
+implementation tried to generalize the fixed selection by loading suffixes
+from a tracked text file, generating repeated `--include-glob` options for one
+combined nonrecursive mirror, and adding listing diagnostics and TLS-listing
+experiments.
+
+The existing Kobeuni destination contained only `.MER` files because the
+historical sequential run copied that first group and then failed before later
+suffix commands ran. This was initially mistaken for evidence that the glob
+filters were incorrect. Live diagnostics later established that:
+
+- protected `cls` listing worked;
+- ESO returned 1,102 filenames in about five seconds;
+- lftp mirror could enumerate and select files;
+- a minimal one-suffix mirror took about 117 seconds before selecting its first
+  file; and
+- the full eight-suffix combined mirror took about 204 seconds before selecting
+  its first file.
+
+The combined mirror was not categorically broken, but its slow, opaque startup
+made diagnosis and operation unnecessarily difficult. The silence watchdog was
+increased from 300 to 900 seconds because lftp can legitimately spend several
+minutes gathering file information.
+
+The project returned to sequential `mirror -c -f` commands because they match
+the known working external script, expose each suffix operationally, associate
+failures with a suffix, and are easier to understand and troubleshoot. The
+small fixed suffix set does not justify runtime configuration. The attempt to
+be clever with a generic allowlist and one combined mirror added complexity
+without delivering enough operational value.
 
 Individual network protocol waits use a 30-second timeout and receive at most
 two sequential attempts. A transfer with no progress for five minutes also
 times out. These finite limits replace lftp's very large retry and
 transfer-timeout defaults while still allowing one retry after a transient
 research-server failure. As a final bound, `servercopy` terminates lftp and
-records a failure if lftp itself produces no output for five minutes.
+records a failure if lftp itself produces no output for 15 minutes.
 
 RUDICS uses SFTP on the CLS-preferred endpoint
 `rudics.thorium.cls.fr`. The legacy name `iridium-rudics.cls.fr` was checked
@@ -166,7 +195,7 @@ Compare protected and unprotected FTPS directory listings without mirroring:
 
 `--diagnose-listing` requires exactly one explicit-FTPS user. It runs no mirror
 or transfer command and creates no destination, ledger, transcript, or lock.
-Output is redacted and streamed to the terminal under the existing five-minute
+Output is redacted and streamed to the terminal under the existing 15-minute
 silence watchdog. The unprotected comparison exposes listing metadata, but
 `ftp:ssl-protect-data yes` remains enabled.
 
@@ -231,8 +260,8 @@ Credential-bearing URL user information emitted by `lftp --dry-run` is replaced
 with `[REDACTED]` before output is written to the terminal or transcript.
 Redacted `lftp` lines are streamed to both destinations as they arrive. If
 `lftp` is silent for 30 seconds, `servercopy` prints a short `still-running`
-line with elapsed and silent time. Each source prints the number of active
-suffix patterns before its single mirror operation.
+line with elapsed and silent time, including the active suffix once its marker
+has appeared. Each suffix-specific mirror prints a marker before it starts.
 
 Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
 a transcript but no ledger rows. Listing diagnostics create none of these and
@@ -269,13 +298,12 @@ The `_runs` transcript remains the detailed diagnostic record.
 - `lftp`
 - `MERMAID` set in the environment
 - Readable `servercopy_sources.csv` beside the executable
-- Readable `data/filename_suffixes.txt` beneath the executable's directory
 - Readable protected credentials at the configured path
 - Writable output root, defaulting to `~/mermaid/servers/`
 
 ## Tests
 
-The test suite checks suffix parsing, generated lftp scripts, listing
+The test suite checks the hardcoded suffix tuple, generated lftp scripts, listing
 diagnostics, output streaming, redaction, heartbeats, and silence termination:
 
 ```sh
@@ -288,7 +316,7 @@ remote servers.
 ## Safety notes
 
 - Check the source registry and destination mapping before the first run.
-- Run `--check`, then `--dry-run`, before the first normal combined mirror.
+- Run `--check`, then `--dry-run`, before the first normal sequential mirror.
 - Treat `--dry-run` and `--diagnose-listing` as authenticated remote operations.
 - Normal mirrors may modify files beneath `<output>/<user>/`.
 - Remote deletions do not remove local files.
