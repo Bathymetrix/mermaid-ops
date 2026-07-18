@@ -83,64 +83,49 @@ Every source uses one authoritative suffix tuple hardcoded in `servercopy`:
 .MER .LOG .BIN .cmd .out .vit .S41 .S61
 ```
 
-Case is significant. For each source, one authenticated lftp session changes
-to `<output>/<user>/` and runs one command per suffix, in the listed order:
+Case is significant. For each source, one authenticated lftp session runs one
+command per suffix, in the listed order. The remote pattern stays in `--file`
+and the canonical `<output>/<user>/` destination stays in
+`--target-directory`:
 
 ```text
-mirror -c -f <remote_root>/*.MER
-mirror -c -f <remote_root>/*.LOG
-mirror -c -f <remote_root>/*.BIN
-mirror -c -f <remote_root>/*.cmd
-mirror -c -f <remote_root>/*.out
-mirror -c -f <remote_root>/*.vit
-mirror -c -f <remote_root>/*.S41
-mirror -c -f <remote_root>/*.S61
+mirror <options> --file=<remote_root>/*.MER --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.LOG --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.BIN --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.cmd --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.out --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.vit --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.S41 --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.S61 --target-directory=<output>/<user>
 ```
 
-The installed lftp 4.9.2 manual defines `-c` as continuing a mirror job when
-possible and `-f FILE` as mirroring one file or globbed group, with
-`/path/to/*.txt` as its example. Thus each generated command has the same
-semantics as the proven historical invocation. `cmd:fail-exit yes` stops the
-session at a failed suffix, and the marker immediately before each command
-identifies the active suffix in output and failure reports.
+`cmd:fail-exit yes` stops the session at a failed suffix, and the marker
+immediately before each command identifies the active suffix in output and
+failure reports.
 
 Files outside the hardcoded suffix tuple, including operational dotfiles,
 tools, and backups, are not selected. Remote files removed from a source do not
 delete local files.
 
-### Why the mirror commands are sequential
+### Why this command shape is deliberate
 
-The older external implementation used explicit commands such as
-`mirror -c -f kobeuni/*.MER`, `mirror -c -f kobeuni/*.LOG`, and so on. A newer
-implementation tried to generalize the fixed selection by loading suffixes
-from a tracked text file, generating repeated `--include-glob` options for one
-combined nonrecursive mirror, and adding listing diagnostics and TLS-listing
-experiments.
+The version 1.3.1 production run on 2026-07-17 successfully fetched `.MER`
+files with `--file=<remote_root>/*.MER` and
+`--target-directory=<output>/<user>`. ESO completed all of its configured
+suffix passes. Kobeuni fetched all 2,864 `.MER` files before an error in that
+first pass caused `cmd:fail-exit` to skip the later commands.
 
-The existing Kobeuni destination contained only `.MER` files because the
-historical sequential run copied that first group and then failed before later
-suffix commands ran. This was initially mistaken for evidence that the glob
-filters were incorrect. Live diagnostics later established that:
+Later attempts to generalize suffix handling introduced forms that could exit
+successfully without downloading anything. A zero exit status established
+neither that a remote pattern matched files nor that files were transferred.
+The final implementation therefore repeats the exact proven `.MER` operation
+for each suffix. The hardcoded tuple is intentional because the set is small
+and operationally fixed. Runtime suffix files, combined include/exclude
+filters, alternate mirror forms, and temporary listing diagnostics increased
+complexity and obscured the working behavior.
 
-- protected `cls` listing worked;
-- ESO returned 1,102 filenames in about five seconds;
-- lftp mirror could enumerate and select files;
-- a minimal one-suffix mirror took about 117 seconds before selecting its first
-  file; and
-- the full eight-suffix combined mirror took about 204 seconds before selecting
-  its first file.
-
-The combined mirror was not categorically broken, but its slow, opaque startup
-made diagnosis and operation unnecessarily difficult. The silence watchdog was
-increased from 300 to 900 seconds because lftp can legitimately spend several
-minutes gathering file information.
-
-The project returned to sequential `mirror -c -f` commands because they match
-the known working external script, expose each suffix operationally, associate
-failures with a suffix, and are easier to understand and troubleshoot. The
-small fixed suffix set does not justify runtime configuration. The attempt to
-be clever with a generic allowlist and one combined mirror added complexity
-without delivering enough operational value.
+The silence watchdog remains 900 seconds because lftp can legitimately spend
+several minutes gathering file information.
 
 Individual network protocol waits use a 30-second timeout and receive at most
 two sequential attempts. A transfer with no progress for five minutes also
@@ -186,19 +171,6 @@ Authenticate and preview remote mirror operations without transferring files:
 ./servercopy --dry-run
 ```
 
-Compare protected and unprotected FTPS directory listings without mirroring:
-
-```sh
-./servercopy --user eso --diagnose-listing --listing-tls protected
-./servercopy --user eso --diagnose-listing --listing-tls unprotected
-```
-
-`--diagnose-listing` requires exactly one explicit-FTPS user. It runs no mirror
-or transfer command and creates no destination, ledger, transcript, or lock.
-Output is redacted and streamed to the terminal under the existing 15-minute
-silence watchdog. The unprotected comparison exposes listing metadata, but
-`ftp:ssl-protect-data yes` remains enabled.
-
 Process only selected logical users:
 
 ```sh
@@ -215,8 +187,7 @@ Use a different server output root:
 ```
 
 User filtering and output selection work with normal, check, and dry-run modes.
-Listing diagnostics require one user and ignore the output root. Show help or
-the operational version with:
+Show help or the operational version with:
 
 ```sh
 ./servercopy --help
@@ -264,8 +235,7 @@ line with elapsed and silent time, including the active suffix once its marker
 has appeared. Each suffix-specific mirror prints a marker before it starts.
 
 Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
-a transcript but no ledger rows. Listing diagnostics create none of these and
-stream directly to the terminal. Normal runs write both.
+a transcript but no ledger rows. Normal runs write both.
 
 An individual source failure does not prevent later sources from running. The
 script prints the source result and lftp exit status immediately, then prints a
@@ -303,8 +273,8 @@ The `_runs` transcript remains the detailed diagnostic record.
 
 ## Tests
 
-The test suite checks the hardcoded suffix tuple, generated lftp scripts, listing
-diagnostics, output streaming, redaction, heartbeats, and silence termination:
+The test suite checks the hardcoded suffix tuple, recovered lftp command shape,
+output streaming, redaction, heartbeats, and silence termination:
 
 ```sh
 python3.14 -m unittest discover -s tests -v
@@ -317,7 +287,7 @@ remote servers.
 
 - Check the source registry and destination mapping before the first run.
 - Run `--check`, then `--dry-run`, before the first normal sequential mirror.
-- Treat `--dry-run` and `--diagnose-listing` as authenticated remote operations.
+- Treat `--dry-run` as an authenticated remote operation.
 - Normal mirrors may modify files beneath `<output>/<user>/`.
 - Remote deletions do not remove local files.
 - Credentials, generated server data, and local sync output must not be
