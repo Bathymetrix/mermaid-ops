@@ -77,16 +77,24 @@ or print credentials.
 
 ## Filename selection
 
-Every source uses one authoritative suffix tuple hardcoded in `servercopy`:
+Every source uses one authoritative fixed suffix tuple hardcoded in
+`servercopy`:
 
 ```text
 .MER .LOG .BIN .cmd .out .vit .S41 .S61
 ```
 
-Case is significant. For each source, one authenticated lftp session runs one
-command per suffix, in the listed order. The remote pattern stays in `--file`
-and the canonical `<output>/<user>/` destination stays in
-`--target-directory`:
+Case is significant. Before mirroring, a separate authenticated lftp operation
+runs `cls -1` once against the configured remote root. `servercopy` parses that
+remote directory listing locally for filenames ending in exactly three decimal
+digits, such as `.000` or `.001`. Duplicate numbered suffixes are reduced to
+one, sorted numerically, and validated as a contiguous sequence beginning with
+`.000`. A source with no numbered suffixes simply retains the fixed plan above.
+
+The fixed suffixes followed by any discovered numbered suffixes form the
+mirror plan. A second authenticated lftp session runs one ordinary mirror step
+per suffix, in that order. The remote pattern stays in `--file` and the
+canonical `<output>/<user>/` destination stays in `--target-directory`:
 
 ```text
 mirror <options> --file=<remote_root>/*.MER --target-directory=<output>/<user>
@@ -97,15 +105,23 @@ mirror <options> --file=<remote_root>/*.out --target-directory=<output>/<user>
 mirror <options> --file=<remote_root>/*.vit --target-directory=<output>/<user>
 mirror <options> --file=<remote_root>/*.S41 --target-directory=<output>/<user>
 mirror <options> --file=<remote_root>/*.S61 --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.000 --target-directory=<output>/<user>
+mirror <options> --file=<remote_root>/*.001 --target-directory=<output>/<user>
 ```
+
+The numbered examples appear only when those suffixes exist remotely. A gap,
+such as `.000`, `.001`, and `.003`, fails discovery rather than silently
+omitting `.003`. Discovery applies uniformly to SFTP and explicit-FTPS sources,
+uses the same bounded connection and security settings as mirroring, and does
+not print the complete remote inventory during normal operation.
 
 `cmd:fail-exit yes` stops the session at a failed suffix, and the marker
 immediately before each command identifies the active suffix in output and
 failure reports.
 
-Files outside the hardcoded suffix tuple, including operational dotfiles,
-tools, and backups, are not selected. Remote files removed from a source do not
-delete local files.
+Files outside the fixed suffix tuple and discovered numbered suffixes, including
+operational dotfiles, tools, and backups, are not selected. Remote files removed
+from a source do not delete local files.
 
 ### Why this command shape is deliberate
 
@@ -125,7 +141,9 @@ filters, alternate mirror forms, and temporary listing diagnostics increased
 complexity and obscured the working behavior.
 
 A later attempt to replace the suffix passes with one complete recursive mirror
-was also rejected after testing. See
+was also rejected after testing. Numbered-suffix discovery uses one lightweight
+directory listing and then preserves the proven per-suffix mirror shape; it
+does not use a whole-tree mirror to inspect the source. See
 [`SERVERCOPY_COMPLETE_MIRROR_EXPERIMENT.md`](SERVERCOPY_COMPLETE_MIRROR_EXPERIMENT.md)
 for the engineering decision and observed evidence.
 
@@ -236,10 +254,12 @@ Every normal or dry-run invocation writes one combined stdout/stderr log:
 
 Credential-bearing URL user information emitted by `lftp --dry-run` is replaced
 with `[REDACTED]` before output is written to the terminal or transcript.
-Redacted `lftp` lines are streamed to both destinations as they arrive. If
-`lftp` is silent for 30 seconds, `servercopy` prints a short `still-running`
-line with elapsed and silent time, including the active suffix once its marker
-has appeared. Each suffix-specific mirror prints a marker before it starts.
+Redacted mirror output lines are streamed to both destinations as they arrive.
+The discovery inventory is parsed without being printed; only the discovery
+step and its resulting suffix list (or `none`) are reported. If `lftp` is silent
+for 30 seconds, `servercopy` prints a short `still-running` line with elapsed
+and silent time, including the active suffix once its marker has appeared. Each
+suffix-specific mirror prints a marker before it starts.
 
 Check mode creates no directories, ledger, lock, or transcript. Dry-run writes
 a transcript but no ledger rows. Normal runs write both.
@@ -280,8 +300,10 @@ The `_runs` transcript remains the detailed diagnostic record.
 
 ## Tests
 
-The test suite checks the hardcoded suffix tuple, recovered lftp command shape,
-output streaming, redaction, heartbeats, and silence termination:
+The test suite checks numbered-suffix discovery, parsing and contiguity,
+the hardcoded fixed suffix tuple, recovered lftp command shape, generic SFTP and
+FTPS behavior, dry-run generation, output suppression and redaction,
+heartbeats, and silence termination:
 
 ```sh
 python3.14 -m unittest discover -s tests -v

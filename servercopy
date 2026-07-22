@@ -20,7 +20,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.5.1"
+SERVERCOPY_VERSION = "1.6.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -31,7 +31,7 @@ COMMON_OPTIONS = (
     "--no-empty-dirs",
     "--parallel=4",
 )
-TAAL_SYNC_SUFFIXES = (
+FIXED_SYNC_SUFFIXES = (
     ".MER",
     ".LOG",
     ".BIN",
@@ -45,7 +45,7 @@ CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
 HEARTBEAT_SECONDS = 30.0
 LFTP_SILENCE_TIMEOUT_SECONDS = 900.0
 LFTP_DIAGNOSTIC_PREFIXES = (
-    "mirror:", "open:", "get:", "put:", "mget:", "pget:"
+    "mirror:", "open:", "cls:", "get:", "put:", "mget:", "pget:"
 )
 
 
@@ -94,15 +94,11 @@ def mirror(arguments: list[str]) -> str:
     return "mirror " + " ".join(quote(argument) for argument in arguments)
 
 
-def build_lftp_script(
-    source: Source,
-    password: str,
-    destination: Path,
-    preview: bool,
-) -> str:
-    """Build lftp input for one source; the password never enters process argv."""
+def lftp_connection_lines(source: Source, password: str) -> list[str]:
+    """Build shared connection input; the password never enters process argv."""
 
     lines = [
+        "set cmd:trace no",
         "set cmd:fail-exit yes",
         "set net:timeout 30s",
         "set net:max-retries 2",
@@ -125,8 +121,21 @@ def build_lftp_script(
         raise ConfigError(f"unsupported protocol for {source.user}: {source.protocol}")
 
     lines.append(f"open -u {quote(source.login)},{quote(password)} {quote(url)}")
+    return lines
+
+
+def build_lftp_script(
+    source: Source,
+    password: str,
+    destination: Path,
+    preview: bool,
+    numbered_suffixes: tuple[str, ...] = (),
+) -> str:
+    """Build lftp input for one source; the password never enters process argv."""
+
+    lines = lftp_connection_lines(source, password)
     root = source.remote_root.rstrip("/") or "."
-    for suffix in TAAL_SYNC_SUFFIXES:
+    for suffix in (*FIXED_SYNC_SUFFIXES, *numbered_suffixes):
         lines.append(f"echo {quote(f'[servercopy] step=mirror suffix={suffix}')}")
         lines.append(
             mirror(
@@ -139,6 +148,37 @@ def build_lftp_script(
             )
         )
     return "\n".join([*lines, "bye", ""])
+
+
+def build_discovery_lftp_script(source: Source, password: str) -> str:
+    """Build a read-only lftp directory-listing operation for discovery."""
+
+    lines = lftp_connection_lines(source, password)
+    root = source.remote_root.rstrip("/")
+    listing_target = "." if root in {"", "."} else f"{root}/"
+    lines.append('set cmd:cls-default ""')
+    lines.append(f"cls -1 {quote(listing_target)}")
+    return "\n".join([*lines, "bye", ""])
+
+
+def parse_numbered_suffixes(listing: str) -> tuple[str, ...]:
+    """Return validated numbered suffixes found in a remote directory listing."""
+
+    numbers: set[int] = set()
+    for line in listing.splitlines():
+        filename = line.rsplit("/", 1)[-1]
+        match = re.search(r"\.([0-9]{3})$", filename)
+        if match:
+            numbers.add(int(match.group(1)))
+
+    ordered = sorted(numbers)
+    for expected, found in enumerate(ordered):
+        if found != expected:
+            raise ConfigError(
+                "numbered suffix sequence is not contiguous: "
+                f"found .{found:03d} after missing .{expected:03d}"
+            )
+    return tuple(f".{number:03d}" for number in ordered)
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -280,8 +320,9 @@ def run_lftp(
     user: str,
     heartbeat_seconds: float = HEARTBEAT_SECONDS,
     silence_timeout_seconds: float = LFTP_SILENCE_TIMEOUT_SECONDS,
+    stream_output: bool = True,
 ) -> tuple[int, list[str]]:
-    """Run lftp while streaming redacted lines and reporting silent intervals."""
+    """Run lftp, capture redacted lines, and report progress and silent intervals."""
 
     try:
         process = subprocess.Popen(
@@ -363,7 +404,8 @@ def run_lftp(
             line = redact_lftp_output(
                 raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
             )
-            report.write(line)
+            if stream_output:
+                report.write(line)
             lines.append(line)
             if line.startswith("[servercopy] step=mirror suffix="):
                 active_suffix = line.partition("suffix=")[2]
@@ -410,6 +452,39 @@ def lftp_failure_detail(code: int, lines: list[str]) -> str:
     else:
         detail.append("no diagnostic line; see inline lftp output")
     return "\n".join(detail)
+
+
+def discover_remote_numbered_suffixes(
+    executable: str,
+    source: Source,
+    password: str,
+    report: Reporter,
+    label: str,
+) -> tuple[str, ...]:
+    """Obtain one remote inventory and return its numbered suffixes."""
+
+    report.write("[servercopy] step=discover-numbered-suffixes")
+    code, lines = run_lftp(
+        executable,
+        build_discovery_lftp_script(source, password),
+        report,
+        label,
+        source.user,
+        stream_output=False,
+    )
+    if code != 0:
+        raise ConfigError(
+            "numbered suffix discovery failed:\n" + lftp_failure_detail(code, lines)
+        )
+    try:
+        suffixes = parse_numbered_suffixes("\n".join(lines))
+    except ConfigError as error:
+        raise ConfigError(f"numbered suffix discovery failed: {error}") from error
+    report.write(
+        "[servercopy] discovered-numbered-suffixes="
+        + (",".join(suffixes) if suffixes else "none")
+    )
+    return suffixes
 
 
 def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
@@ -497,6 +572,27 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         report.write(f"[{label}] remote={remote}")
         report.write(f"[{label}] remote-root={source.remote_root}")
         report.write(f"[{label}] destination={destination}")
+
+        discovery_started = time.monotonic()
+        try:
+            numbered_suffixes = discover_remote_numbered_suffixes(
+                lftp,
+                source,
+                credentials[source.login],
+                report,
+                label,
+            )
+        except ConfigError as error:
+            report.write(
+                f"[{label}] result=failure user={source.user} stage=discovery "
+                f"elapsed={int(time.monotonic() - discovery_started)}s"
+            )
+            fail(source.user, str(error))
+            if not args.dry_run:
+                append_ledger(ledger, source.user, "failure", start)
+            report.write()
+            continue
+
         report.write(f"[{label}] lftp mirror {'preview' if args.dry_run else 'output'} follows:")
 
         lftp_started = time.monotonic()
@@ -507,6 +603,7 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
                 credentials[source.login],
                 destination,
                 args.dry_run,
+                numbered_suffixes,
             ),
             report,
             label,
