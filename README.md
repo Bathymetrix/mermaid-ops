@@ -96,6 +96,17 @@ digits, such as `.000` or `.001`. Duplicate numbered suffixes are reduced to
 one, sorted numerically, and validated as a contiguous sequence beginning with
 `.000`. A source with no numbered suffixes simply retains the fixed plan above.
 
+This discovery is attempted automatically for every source. The current TAAL
+FTPS accounts typically expose no numbered-suffix files, so discovery for
+`eso` and `kobeuni` normally reports `none`. Historical archive notes indicate
+that TAAL `.000`-style files were supplied separately while access to them
+through the FTPS endpoint was unavailable. Their absence from a modern TAAL
+mirror is therefore expected and does not indicate a mirror failure.
+
+Numbered-suffix discovery is intentionally retained. If those files become
+visible on TAAL or any other configured server, `servercopy` will discover and
+mirror them automatically without a code or configuration change.
+
 The fixed suffixes followed by any discovered numbered suffixes form the
 mirror plan. A second authenticated lftp session runs one ordinary mirror step
 per suffix, in that order. The remote pattern stays in `--file` and the

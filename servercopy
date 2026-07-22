@@ -475,6 +475,9 @@ def discover_remote_numbered_suffixes(
             "numbered suffix discovery failed:\n" + lftp_failure_detail(code, lines)
         )
     try:
+        # TAAL commonly yields none: historical .000-style files were not
+        # exposed through FTPS and were distributed separately. Keep discovery
+        # so newly exposed numbered suffixes are mirrored automatically.
         suffixes = parse_numbered_suffixes("\n".join(lines))
     except ConfigError as error:
         raise ConfigError(f"numbered suffix discovery failed: {error}") from error
