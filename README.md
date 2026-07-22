@@ -70,6 +70,11 @@ passed to `lftp` as a process argument.
 Multiple source rows may refer to the same login, so shared passwords appear
 only once in the protected file.
 
+A configured source whose login is absent from the credential registry is
+skipped with a warning and included in the final summary. Other configured
+sources continue normally. If no selected source has credentials, `servercopy`
+exits nonzero without attempting a remote operation.
+
 For the initial migration, carry the existing RUDICS `login,password` rows into
 the new credential registry unchanged, then add the one shared Taal login. This
 is an operator-managed credential step; `servercopy` does not import, rewrite,
@@ -268,8 +273,9 @@ An individual source failure does not prevent later sources from running. The
 script prints the source result and lftp exit status immediately, then prints a
 compact final failure summary containing diagnostic lines rather than replaying
 all transfer output. It exits nonzero if any selected source fails. Successful
-all-source runs exit zero. Missing or malformed local configuration also exits
-nonzero before transfer attempts begin.
+runs exit zero even when sources without credentials were skipped. Malformed
+local configuration still exits nonzero before transfer attempts begin; a run
+with no runnable sources also exits nonzero.
 
 An advisory lock at `<output>/_runs/servercopy.lock` prevents overlapping normal
 and dry-run invocations. This is intended for unattended cron use.

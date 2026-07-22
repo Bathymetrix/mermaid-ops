@@ -4,6 +4,7 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import time
 import unittest
 from unittest.mock import MagicMock, patch
@@ -415,6 +416,33 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(len(sources), 20)
         self.assertEqual(sources[-1].user, "kobeuni")
 
+    def test_comment_only_credentials_file_is_an_empty_registry(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "credentials.csv"
+            path.write_text("# inactive endpoints\n\n", encoding="ascii")
+
+            self.assertEqual(servercopy.load_credentials(path), {})
+
+    def test_malformed_credentials_remain_fatal(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "credentials.csv"
+            path.write_text("login,password,extra\n", encoding="ascii")
+
+            with self.assertRaisesRegex(
+                servercopy.ConfigError, "malformed credentials line 1"
+            ):
+                servercopy.load_credentials(path)
+
+    def test_duplicate_credential_logins_remain_fatal(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "credentials.csv"
+            path.write_text("login,one\nlogin,two\n", encoding="ascii")
+
+            with self.assertRaisesRegex(
+                servercopy.ConfigError, "duplicate credential login on line 2"
+            ):
+                servercopy.load_credentials(path)
+
     def test_failure_detail_keeps_diagnostics_not_transfer_chatter(self) -> None:
         detail = servercopy.lftp_failure_detail(
             1,
@@ -467,6 +495,103 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             mirror_script.count('"--dry-run"'),
             len(servercopy.FIXED_SYNC_SUFFIXES) + 2,
+        )
+        messages = [call.args[0] for call in report.write.call_args_list if call.args]
+        self.assertFalse(any("skipping source" in message for message in messages))
+        self.assertFalse(any(message == "\nSkipped:" for message in messages))
+        self.assertIn("DONE: dry run completed for /tmp/servercopy-test", messages)
+
+    def test_missing_credential_skips_one_source_and_runs_the_others(self) -> None:
+        missing = rudics_source("s_m0056")
+        runnable = rudics_source("s_m0057")
+        args = servercopy.parse_args(["--dry-run", "--output", "/tmp/servercopy-test"])
+        report = MagicMock()
+
+        with (
+            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
+            patch.object(servercopy, "load_sources", return_value=[missing, runnable]),
+            patch.object(
+                servercopy,
+                "load_credentials",
+                return_value={runnable.login: "fake-password"},
+            ),
+            patch.object(
+                servercopy, "discover_remote_numbered_suffixes", return_value=()
+            ) as discover,
+            patch.object(servercopy, "run_lftp", return_value=(0, [])),
+            patch.dict(servercopy.os.environ, {}, clear=True),
+        ):
+            code = servercopy.run_workflow(args, Path("/unused"), report)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(discover.call_count, 1)
+        self.assertEqual(discover.call_args.args[1], runnable)
+        report.write.assert_any_call(
+            "Warning: skipping source 's_m0056' (credentials not found)",
+            error=True,
+        )
+        report.write.assert_any_call("  s_m0056 (missing credentials)", error=True)
+
+    def test_multiple_missing_credentials_are_all_summarized(self) -> None:
+        missing = [rudics_source("s_m0055"), rudics_source("s_m0056")]
+        runnable = rudics_source("s_m0057")
+        args = servercopy.parse_args(["--dry-run", "--output", "/tmp/servercopy-test"])
+        report = MagicMock()
+
+        with (
+            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
+            patch.object(
+                servercopy, "load_sources", return_value=[*missing, runnable]
+            ),
+            patch.object(
+                servercopy,
+                "load_credentials",
+                return_value={runnable.login: "fake-password"},
+            ),
+            patch.object(
+                servercopy, "discover_remote_numbered_suffixes", return_value=()
+            ) as discover,
+            patch.object(servercopy, "run_lftp", return_value=(0, [])),
+            patch.dict(servercopy.os.environ, {}, clear=True),
+        ):
+            code = servercopy.run_workflow(args, Path("/unused"), report)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(discover.call_count, 1)
+        for source in missing:
+            report.write.assert_any_call(
+                f"Warning: skipping source '{source.user}' (credentials not found)",
+                error=True,
+            )
+            report.write.assert_any_call(
+                f"  {source.user} (missing credentials)", error=True
+            )
+
+    def test_all_missing_credentials_exit_nonzero_without_running_sources(self) -> None:
+        sources = [rudics_source("s_m0055"), rudics_source("s_m0056")]
+        args = servercopy.parse_args(["--dry-run", "--output", "/tmp/servercopy-test"])
+        report = MagicMock()
+
+        with (
+            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
+            patch.object(servercopy, "load_sources", return_value=sources),
+            patch.object(servercopy, "load_credentials", return_value={}),
+            patch.object(servercopy, "discover_remote_numbered_suffixes") as discover,
+            patch.object(servercopy, "run_lftp") as run_lftp,
+            patch.dict(servercopy.os.environ, {}, clear=True),
+        ):
+            code = servercopy.run_workflow(args, Path("/unused"), report)
+
+        self.assertEqual(code, 1)
+        discover.assert_not_called()
+        run_lftp.assert_not_called()
+        for source in sources:
+            report.write.assert_any_call(
+                f"  {source.user} (missing credentials)", error=True
+            )
+        report.write.assert_any_call(
+            "\nError: no runnable sources; all selected sources are missing credentials.",
+            error=True,
         )
 
     def test_check_performs_no_discovery_or_remote_execution(self) -> None:

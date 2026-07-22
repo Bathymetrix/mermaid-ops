@@ -20,7 +20,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.6.0"
+SERVERCOPY_VERSION = "1.7.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -279,8 +279,6 @@ def load_credentials(path: Path) -> dict[str, str]:
             if login in credentials:
                 raise ConfigError(f"duplicate credential login on line {line_number}: {login}")
             credentials[login] = password
-    if not credentials:
-        raise ConfigError(f"no credentials configured in {path}")
     return credentials
 
 
@@ -497,6 +495,7 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         report.write("Error: lftp is required but was not found on PATH.", error=True)
         return 1
 
+    skipped: list[Source] = []
     try:
         sources = load_sources(sources_path)
         override = os.environ.get("SFTP_PORT")
@@ -515,10 +514,14 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         if not sources:
             raise ConfigError(f"no requested users were found in {sources_path}")
         credentials = load_credentials(credentials_path)
-        missing_logins = sorted({source.login for source in sources} - credentials.keys())
-        if missing_logins:
-            raise ConfigError("missing credential login(s): " + ",".join(missing_logins))
-        if not args.check and not args.dry_run:
+        skipped = [source for source in sources if source.login not in credentials]
+        sources = [source for source in sources if source.login in credentials]
+        for source in skipped:
+            report.write(
+                f"Warning: skipping source '{source.user}' (credentials not found)",
+                error=True,
+            )
+        if sources and not args.check and not args.dry_run:
             prepare_ledger(ledger)
     except (ConfigError, OSError) as error:
         report.write(f"Error: {error}", error=True)
@@ -635,6 +638,17 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
     )
     for warning in warnings:
         report.write(warning, error=True)
+    if skipped:
+        report.write("\nSkipped:", error=True)
+        for source in skipped:
+            report.write(f"  {source.user} (missing credentials)", error=True)
+    if not sources:
+        report.write(
+            "\nError: no runnable sources; all selected sources are missing credentials.",
+            error=True,
+        )
+        report.write("##########################################################")
+        return 1
     if failures:
         report.write("\nFailures:", error=True)
         for user, lines in failures.items():
