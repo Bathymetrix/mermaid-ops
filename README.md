@@ -124,8 +124,15 @@ and operationally fixed. Runtime suffix files, combined include/exclude
 filters, alternate mirror forms, and temporary listing diagnostics increased
 complexity and obscured the working behavior.
 
-The silence watchdog remains 900 seconds because lftp can legitimately spend
-several minutes gathering file information.
+A later attempt to replace the suffix passes with one complete recursive mirror
+was also rejected after testing. See
+[`SERVERCOPY_COMPLETE_MIRROR_EXPERIMENT.md`](SERVERCOPY_COMPLETE_MIRROR_EXPERIMENT.md)
+for the engineering decision and observed evidence.
+
+On `kobeuni`, silent periods of five minutes or more before lftp begins
+emitting transfer output are normal. Such silence is not by itself evidence of
+failure or of any particular internal lftp operation. The silence watchdog
+therefore remains 900 seconds.
 
 Individual network protocol waits use a 30-second timeout and receive at most
 two sequential attempts. A transfer with no progress for five minutes also
