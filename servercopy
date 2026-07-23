@@ -489,7 +489,7 @@ def discover_remote_numbered_suffixes(
 
 
 def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
-    sources_path = Path(__file__).resolve().with_name("servercopy_sources.csv")
+    sources_path = Path(__file__).resolve().parent / "data" / "servercopy_sources.csv"
     credentials_path = root / "passwords" / "servercopy_credentials.csv"
     server_root = args.output.expanduser()
     ledger = server_root / "_runs" / "servercopy_runs.csv"
