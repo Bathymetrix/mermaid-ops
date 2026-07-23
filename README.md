@@ -103,6 +103,17 @@ that TAAL `.000`-style files were supplied separately while access to them
 through the FTPS endpoint was unavailable. Their absence from a modern TAAL
 mirror is therefore expected and does not indicate a mirror failure.
 
+The historical Kobe archive is the working tree at
+`~/mermaid/server_jamstec/`. Despite that legacy local name, it contains files
+previously downloaded with FileZilla from the TAAL `kobeuni` user; it is not an
+output of the CLS JAMSTEC accounts. When audited on 2026-07-23, the archive
+working tree contained 7,662 files, including 300 numbered-suffix files
+(`.000`, `.001`, and `.002`). The current `~/mermaid/servers/kobeuni/` live
+mirror contained 5,843 files and no numbered-suffix files. Preserve the
+historical archive separately: the current TAAL mirror supersedes the old live
+transfer arrangement, but it cannot reproduce files that TAAL never exposed
+through FTPS.
+
 Numbered-suffix discovery is intentionally retained. If those files become
 visible on TAAL or any other configured server, `servercopy` will discover and
 mirror them automatically without a code or configuration change.
@@ -181,6 +192,12 @@ without authentication on 2026-07-16; both names resolved through the same
 canonical CLS hostname and presented identical RSA and ECDSA SSH host keys.
 Use the preferred name and recheck DNS and host identity if CLS announces a
 migration.
+
+The retired `servercopy_princeton.zsh` name referred to an old aggregate
+workflow, not to a distinct Princeton host. That script also connected to
+`rudics.thorium.cls.fr` and merged all of its accounts into
+`$MERMAID/server_princeton/`. The canonical workflow supersedes that local
+layout by keeping each logical source in `<output>/<user>/`.
 
 Taal uses explicit FTPS on port 21. TLS is required, data and directory-listing
 connections are protected, and the server certificate is verified.

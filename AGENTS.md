@@ -138,3 +138,8 @@ requirements, and safety rather than branding.
 
 Use plain ASCII unless an existing file intentionally uses another character
 set.
+
+## Git
+
+When suggesting a commit message with a body, format the elaboration as
+hyphen-prefixed phrase fragments rather than full sentences.

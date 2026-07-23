@@ -1,6 +1,0 @@
-(1) taal sync suffixes -- really it's both endpoints right?
-
-(2) .000, .001, .002 etc. not found; need to have a loop(?) inside that copies
-all 000, and if that exists, then all 001, ..., to N until no more found.
-
-(3) compare ~/mermaid/server_jamstec/ and this ~/mermaid/servers/*
