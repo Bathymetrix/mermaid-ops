@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 
-SERVERCOPY_CRON_VERSION = "2.0.0"
+SERVERCOPY_CRON_VERSION = "2.1.0"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
 
@@ -146,6 +146,48 @@ def run_servercopy(command: Path, servers_repository: Path) -> int:
     return result.returncode
 
 
+def get_servercopy_version(command: Path) -> str | None:
+    """Return servercopy's independent version through its public CLI."""
+
+    try:
+        result = subprocess.run(
+            [str(command), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, UnicodeError):
+        print(
+            "Error: could not run servercopy --version.",
+            file=sys.stderr,
+        )
+        return None
+
+    if result.returncode != 0:
+        print(
+            "Error: servercopy --version failed "
+            f"(exit status {result.returncode}).",
+            file=sys.stderr,
+        )
+        return None
+
+    output = result.stdout.strip()
+    prefix = "servercopy "
+    if (
+        not output.startswith(prefix)
+        or not (version := output.removeprefix(prefix))
+        or not version.isprintable()
+        or any(character.isspace() for character in version)
+    ):
+        print(
+            "Error: servercopy --version returned malformed output.",
+            file=sys.stderr,
+        )
+        return None
+
+    return version
+
+
 def run_git(
     repository: Path, *arguments: str
 ) -> subprocess.CompletedProcess[str]:
@@ -157,7 +199,10 @@ def run_git(
     )
 
 
-def commit_synced_changes(servers_repository: Path) -> int:
+def commit_synced_changes(
+    servers_repository: Path,
+    servercopy_version: str,
+) -> int:
     """Stage and commit after a successful servercopy run."""
 
     try:
@@ -215,7 +260,11 @@ def commit_synced_changes(servers_repository: Path) -> int:
             )
             return 1
 
-        message = f"servercopy [cron]: {utc_now()}"
+        message = (
+            f"servercopy [cron]: {utc_now()} "
+            f"[servercopy={servercopy_version} "
+            f"servercopy_cron={SERVERCOPY_CRON_VERSION}]"
+        )
         committed = run_git(servers_repository, "commit", "-m", message)
         if committed.returncode != 0:
             print(
@@ -246,11 +295,15 @@ def run_cron_workflow(
         )
         return 1
 
+    servercopy_version = get_servercopy_version(servercopy_command)
+    if servercopy_version is None:
+        return finish_failed_run(check_uuid, 1)
+
     servercopy_status = run_servercopy(servercopy_command, servers_repository)
     if servercopy_status != 0:
         return finish_failed_run(check_uuid, servercopy_status)
 
-    git_status = commit_synced_changes(servers_repository)
+    git_status = commit_synced_changes(servers_repository, servercopy_version)
     if git_status != 0:
         return finish_failed_run(check_uuid, git_status)
 

@@ -388,12 +388,15 @@ failure   https://hc-ping.com/<check-uuid>/fail
 
 After obtaining its non-overlap lock and loading the UUID, the wrapper requires
 the start ping to succeed before it runs `servercopy`. A failed start ping exits
-nonzero without synchronization or Git activity. A `servercopy` or Git failure
-sends the failure ping and retains the underlying nonzero status; a secondary
+nonzero without synchronization or Git activity. After `/start`, the wrapper
+obtains the synchronization engine's version through `servercopy --version`; a
+failed or malformed version query sends the failure ping and aborts before
+synchronization or Git activity. A `servercopy` or Git failure sends the
+failure ping and retains the underlying nonzero status; a secondary
 failure-ping error is reported without replacing that status. A successful
-no-change run and a successful committed run both send the success ping. If the
-final success ping fails, the wrapper exits nonzero but does not undo completed
-Git work. Pings are not retried.
+no-change run and a successful committed run both send the success ping. If
+the final success ping fails, the wrapper exits nonzero but does not undo
+completed Git work. Pings are not retried.
 
 Create a Healthchecks.io Check with the same cron expression used by the host:
 
@@ -412,9 +415,17 @@ chat ID.
 If synchronization fails, partial downloads remain uncommitted and no Git
 command is run. The next cron invocation proceeds at its normal scheduled time.
 After `servercopy` exits successfully, the wrapper refuses a pre-staged index,
-runs `git add -A`, creates a UTC-dated `servercopy [cron]` commit only when
-changes exist, and does not push. Git failures send the failure ping and exit
-nonzero without attempting a reset.
+runs `git add -A`, and creates a commit only when changes exist. The message
+records the UTC timestamp and both independently versioned executables:
+
+```text
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.7.0 servercopy_cron=2.1.0]
+```
+
+`servercopy_cron` obtains the `servercopy` version through the latter's public
+`--version` CLI; the two versions do not need to match and do not share a
+version constant. The wrapper does not push. Git failures send the failure ping
+and exit nonzero without attempting a reset.
 The wrapper follows the existing `servercopy` exit contract, including its
 documented missing-credential skip behavior, and does not parse transfer output
 to redefine success. Do not run `servercopy` manually while a scheduled wrapper

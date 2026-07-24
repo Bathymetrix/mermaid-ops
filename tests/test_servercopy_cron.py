@@ -23,6 +23,7 @@ sys.modules[LOADER.name] = servercopy_cron
 LOADER.exec_module(servercopy_cron)
 
 CHECK_UUID = "11111111-2222-3333-4444-555555555555"
+SERVERCOPY_VERSION = "1.7.0"
 
 
 def git_result(
@@ -206,6 +207,73 @@ class HealthchecksHttpTests(unittest.TestCase):
 
 
 class SubprocessTests(unittest.TestCase):
+    def test_servercopy_version_is_read_from_exact_version_command(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["servercopy", "--version"],
+            0,
+            stdout=f"servercopy {SERVERCOPY_VERSION}\n",
+            stderr="",
+        )
+
+        with patch.object(
+            servercopy_cron.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            version = servercopy_cron.get_servercopy_version(
+                Path("/repo/servercopy")
+            )
+
+        self.assertEqual(version, SERVERCOPY_VERSION)
+        run.assert_called_once_with(
+            ["/repo/servercopy", "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_servercopy_version_probe_failures_return_none(self) -> None:
+        failures = (
+            subprocess.CompletedProcess(
+                ["servercopy", "--version"],
+                7,
+                stdout="",
+                stderr="synthetic failure",
+            ),
+            subprocess.CompletedProcess(
+                ["servercopy", "--version"],
+                0,
+                stdout="servercopy 1.7.0 unexpected\n",
+                stderr="",
+            ),
+            OSError("synthetic launch failure"),
+        )
+
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                error_output = StringIO()
+                with (
+                    patch.object(
+                        servercopy_cron.subprocess,
+                        "run",
+                        side_effect=failure
+                        if isinstance(failure, OSError)
+                        else None,
+                        return_value=None
+                        if isinstance(failure, OSError)
+                        else failure,
+                    ),
+                    redirect_stderr(error_output),
+                ):
+                    version = servercopy_cron.get_servercopy_version(
+                        Path("/repo/servercopy")
+                    )
+
+                self.assertIsNone(version)
+                error = error_output.getvalue()
+                self.assertIn("servercopy", error)
+                self.assertIn("version", error)
+
     def test_servercopy_inherits_live_output_and_uses_mermaid_servers(self) -> None:
         completed = subprocess.CompletedProcess(["servercopy"], 0)
 
@@ -234,6 +302,10 @@ class WorkflowTests(unittest.TestCase):
                 "ping_start",
                 side_effect=servercopy_cron.HealthchecksPingError,
             ) as ping_start,
+            patch.object(
+                servercopy_cron,
+                "get_servercopy_version",
+            ) as get_version,
             patch.object(servercopy_cron, "run_servercopy") as run_servercopy,
             patch.object(
                 servercopy_cron, "commit_synced_changes"
@@ -252,9 +324,55 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("start ping failed", error_output.getvalue())
         self.assertNotIn(CHECK_UUID, error_output.getvalue())
         ping_start.assert_called_once_with(CHECK_UUID)
+        get_version.assert_not_called()
         run_servercopy.assert_not_called()
         commit_changes.assert_not_called()
         ping_failure.assert_not_called()
+        ping_success.assert_not_called()
+
+    def test_version_probe_failure_sends_failure_without_sync_or_git(self) -> None:
+        lifecycle = Mock()
+        start = Mock()
+        get_version = Mock(return_value=None)
+        failure = Mock()
+        lifecycle.attach_mock(start, "start")
+        lifecycle.attach_mock(get_version, "version")
+        lifecycle.attach_mock(failure, "failure")
+
+        with (
+            patch.object(servercopy_cron, "ping_start", start),
+            patch.object(
+                servercopy_cron,
+                "get_servercopy_version",
+                get_version,
+            ),
+            patch.object(servercopy_cron, "run_servercopy") as run_servercopy,
+            patch.object(
+                servercopy_cron,
+                "commit_synced_changes",
+            ) as commit_changes,
+            patch.object(servercopy_cron, "ping_failure", failure),
+            patch.object(servercopy_cron, "ping_success") as ping_success,
+            patch.object(servercopy_cron, "run_git") as run_git,
+        ):
+            status = servercopy_cron.run_cron_workflow(
+                Path("/repo/servercopy"),
+                Path("/mermaid/servers"),
+                CHECK_UUID,
+            )
+
+        self.assertNotEqual(status, 0)
+        self.assertEqual(
+            lifecycle.mock_calls,
+            [
+                call.start(CHECK_UUID),
+                call.version(Path("/repo/servercopy")),
+                call.failure(CHECK_UUID),
+            ],
+        )
+        run_servercopy.assert_not_called()
+        commit_changes.assert_not_called()
+        run_git.assert_not_called()
         ping_success.assert_not_called()
 
     def test_failed_servercopy_sends_failure_and_performs_no_git_commands(
@@ -262,14 +380,21 @@ class WorkflowTests(unittest.TestCase):
     ) -> None:
         lifecycle = Mock()
         start = Mock()
+        get_version = Mock(return_value=SERVERCOPY_VERSION)
         run_servercopy = Mock(return_value=17)
         failure = Mock()
         lifecycle.attach_mock(start, "start")
+        lifecycle.attach_mock(get_version, "version")
         lifecycle.attach_mock(run_servercopy, "servercopy")
         lifecycle.attach_mock(failure, "failure")
 
         with (
             patch.object(servercopy_cron, "ping_start", start),
+            patch.object(
+                servercopy_cron,
+                "get_servercopy_version",
+                get_version,
+            ),
             patch.object(servercopy_cron, "run_servercopy", run_servercopy),
             patch.object(servercopy_cron, "ping_failure", failure),
             patch.object(servercopy_cron, "run_git") as run_git,
@@ -286,6 +411,7 @@ class WorkflowTests(unittest.TestCase):
             lifecycle.mock_calls,
             [
                 call.start(CHECK_UUID),
+                call.version(Path("/repo/servercopy")),
                 call.servercopy(
                     Path("/repo/servercopy"),
                     Path("/mermaid/servers"),
@@ -301,6 +427,11 @@ class WorkflowTests(unittest.TestCase):
 
         with (
             patch.object(servercopy_cron, "ping_start"),
+            patch.object(
+                servercopy_cron,
+                "get_servercopy_version",
+                return_value=SERVERCOPY_VERSION,
+            ),
             patch.object(servercopy_cron, "run_servercopy", return_value=17),
             patch.object(
                 servercopy_cron,
@@ -333,6 +464,11 @@ class WorkflowTests(unittest.TestCase):
 
             with (
                 patch.object(servercopy_cron, "ping_start"),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    return_value=SERVERCOPY_VERSION,
+                ),
                 patch.object(servercopy_cron, "run_servercopy", return_value=0),
                 patch.object(
                     servercopy_cron,
@@ -362,6 +498,11 @@ class WorkflowTests(unittest.TestCase):
 
             with (
                 patch.object(servercopy_cron, "ping_start"),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    return_value=SERVERCOPY_VERSION,
+                ),
                 patch.object(servercopy_cron, "run_servercopy", return_value=0),
                 patch.object(
                     servercopy_cron,
@@ -393,6 +534,11 @@ class WorkflowTests(unittest.TestCase):
 
             with (
                 patch.object(servercopy_cron, "ping_start"),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    return_value=SERVERCOPY_VERSION,
+                ),
                 patch.object(servercopy_cron, "run_servercopy", return_value=0),
                 patch.object(servercopy_cron, "run_git", side_effect=responses),
                 patch.object(servercopy_cron, "ping_failure") as ping_failure,
@@ -420,6 +566,11 @@ class WorkflowTests(unittest.TestCase):
 
             with (
                 patch.object(servercopy_cron, "ping_start"),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    return_value=SERVERCOPY_VERSION,
+                ),
                 patch.object(servercopy_cron, "run_servercopy", return_value=0),
                 patch.object(
                     servercopy_cron,
@@ -461,6 +612,11 @@ class WorkflowTests(unittest.TestCase):
 
             with (
                 patch.object(servercopy_cron, "ping_start"),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    return_value=SERVERCOPY_VERSION,
+                ),
                 patch.object(servercopy_cron, "run_servercopy", return_value=0),
                 patch.object(servercopy_cron, "run_git", side_effect=record_git),
                 patch.object(
@@ -486,7 +642,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             events[-2:],
             [
-                "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z",
+                "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
+                "[servercopy=1.7.0 servercopy_cron=2.1.0]",
                 "failure",
             ],
         )
@@ -515,6 +672,12 @@ class WorkflowTests(unittest.TestCase):
                     servercopy_cron,
                     "ping_start",
                     side_effect=lambda uuid: events.append("start"),
+                ),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    side_effect=lambda command: events.append("version")
+                    or SERVERCOPY_VERSION,
                 ),
                 patch.object(
                     servercopy_cron,
@@ -548,6 +711,7 @@ class WorkflowTests(unittest.TestCase):
             events,
             [
                 "start",
+                "version",
                 "servercopy",
                 "git rev-parse --show-toplevel",
                 "git diff --cached --quiet --exit-code",
@@ -585,6 +749,12 @@ class WorkflowTests(unittest.TestCase):
                 ),
                 patch.object(
                     servercopy_cron,
+                    "get_servercopy_version",
+                    side_effect=lambda command: events.append("version")
+                    or SERVERCOPY_VERSION,
+                ),
+                patch.object(
+                    servercopy_cron,
                     "run_servercopy",
                     side_effect=lambda command, repository: events.append(
                         "servercopy"
@@ -615,7 +785,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             events[-2:],
             [
-                "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z",
+                "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
+                "[servercopy=1.7.0 servercopy_cron=2.1.0]",
                 "success",
             ],
         )
@@ -635,6 +806,11 @@ class WorkflowTests(unittest.TestCase):
 
             with (
                 patch.object(servercopy_cron, "ping_start"),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    return_value=SERVERCOPY_VERSION,
+                ),
                 patch.object(servercopy_cron, "run_servercopy", return_value=0),
                 patch.object(
                     servercopy_cron,
@@ -670,7 +846,8 @@ class WorkflowTests(unittest.TestCase):
                 servers,
                 "commit",
                 "-m",
-                "servercopy [cron]: 2026-07-23T22:30:00Z",
+                "servercopy [cron]: 2026-07-23T22:30:00Z "
+                "[servercopy=1.7.0 servercopy_cron=2.1.0]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)
@@ -694,7 +871,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.0.0\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.1.0\n")
                 load_uuid.assert_not_called()
 
     def test_missing_mermaid_fails_before_any_work(self) -> None:

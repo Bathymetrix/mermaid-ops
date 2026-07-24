@@ -17,6 +17,16 @@ acquire lock and validate monitoring configuration
 send Healthchecks.io /start
         |
         v
+query servercopy --version
+        |
+        v
+did version discovery succeed?
+    no  --> send /fail
+            perform no synchronization or Git operations
+            exit nonzero
+    yes --> continue
+        |
+        v
 run servercopy
         |
         v
@@ -53,6 +63,11 @@ operational version without requiring `MERMAID`, loading monitoring
 configuration, or starting a run. `SERVERCOPY_CRON_VERSION` is independent of
 the `servercopy` version and should be incremented whenever the wrapper's CLI,
 locking, monitoring, or Git behavior changes meaningfully.
+
+For commit provenance, `servercopy_cron` obtains `servercopy`'s independently
+versioned value through the public `servercopy --version` CLI and records both
+versions. The executables do not need matching versions and do not share a
+version constant.
 
 ## Locking and monitoring configuration
 
@@ -109,12 +124,12 @@ wrapper reports a sanitized monitoring error and exits nonzero without
 synchronization or Git activity. This prevents an unmonitored run from
 modifying the servers repository.
 
-After `/start` succeeds, every handled synchronization or Git failure attempts
-`/fail`. A secondary failure-ping error is reported but never replaces the
-meaningful underlying nonzero status. A success ping is sent only after the
-entire synchronization-and-Git workflow has completed. If that final request
-fails, the wrapper exits nonzero but does not undo a completed commit or other
-successful work.
+After `/start` succeeds, a version-discovery, synchronization, or Git failure
+attempts `/fail`. A secondary failure-ping error is reported but never replaces
+the meaningful underlying nonzero status. A success ping is sent only after
+the entire synchronization-and-Git workflow has completed. If that final
+request fails, the wrapper exits nonzero but does not undo a completed commit
+or other successful work.
 
 Healthchecks.io, not the wrapper, detects executions that never report a
 terminal state:
@@ -138,7 +153,8 @@ Telegram, call the Telegram Bot API, or store a Telegram bot token or chat ID.
 
 ## Synchronization behavior
 
-After the start ping succeeds, `servercopy` is invoked with:
+After the start ping succeeds and `servercopy --version` returns a valid
+version, `servercopy` is invoked with:
 
 ```text
 --output $MERMAID/servers
@@ -193,11 +209,13 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.7.0 servercopy_cron=2.1.0]
 ```
 
-The timestamp is timezone-aware UTC. Only after the commit succeeds does the
-wrapper send the success ping and exit zero. The wrapper never pushes.
+The timestamp is timezone-aware UTC, and the two version fields identify the
+independently versioned synchronization engine and cron wrapper used for the
+run. Only after the commit succeeds does the wrapper send the success ping and
+exit zero. The wrapper never pushes.
 
 A Git worktree check, index inspection, staging, or commit failure is reported
 to stderr, followed by an attempted failure ping and a nonzero exit. The wrapper
@@ -249,6 +267,8 @@ schedule, Grace Time, or Integrations.
 - Missing, unreadable, empty, or invalid UUID file: nonzero, with no monitoring
   ping, synchronization, or Git action.
 - Start-ping failure: nonzero, with no synchronization or Git action.
+- `servercopy --version` execution failure or malformed output: nonzero after
+  one failure-ping attempt, with no synchronization or Git action.
 - Synchronization failure: the original nonzero `servercopy` status after one
   failure-ping attempt, with no Git command.
 - Git validation, inspection, staging, or commit failure: nonzero after one
