@@ -415,8 +415,33 @@ class CommandTests(unittest.TestCase):
             SCRIPT.with_name("data") / "servercopy_sources.csv"
         )
 
-        self.assertEqual(len(sources), 20)
+        self.assertEqual(len(sources), 19)
         self.assertEqual(sources[-1].user, "kobeuni")
+
+    def test_source_registry_skips_full_line_comments(self) -> None:
+        comment_lines = ("#user", "# user", "   #user", "   # user", "#", "#    ")
+
+        for comment_line in comment_lines:
+            with self.subTest(comment_line=comment_line):
+                with TemporaryDirectory() as directory:
+                    path = Path(directory) / "sources.csv"
+                    path.write_text(
+                        ",".join(servercopy.SOURCE_FIELDS)
+                        + "\n"
+                        + comment_line
+                        + "\n"
+                        + "active,active,sftp,example.com,22,.\n",
+                        encoding="ascii",
+                    )
+
+                    self.assertEqual(
+                        servercopy.load_sources(path),
+                        [
+                            servercopy.Source(
+                                "active", "active", "sftp", "example.com", 22, "."
+                            )
+                        ],
+                    )
 
     def test_comment_only_credentials_file_is_an_empty_registry(self) -> None:
         with TemporaryDirectory() as directory:

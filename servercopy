@@ -20,7 +20,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.8.0"
+SERVERCOPY_VERSION = "1.8.1"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -227,7 +227,7 @@ def load_sources(path: Path) -> list[Source]:
         if tuple(next(reader, ())) != SOURCE_FIELDS:
             raise ConfigError(f"unexpected source registry header in {path}")
         for line_number, row in enumerate(reader, 2):
-            if not row:
+            if not row or row[0].lstrip().startswith("#"):
                 continue
             if len(row) != len(SOURCE_FIELDS):
                 raise ConfigError(f"malformed source registry line {line_number} in {path}")
