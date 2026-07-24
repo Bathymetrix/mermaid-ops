@@ -9,10 +9,12 @@ stdout/stderr transcripts. It does not delete local mirror files, commit copied
 data to Git, convert VIT files, or run exports.
 
 Scheduled runs use the directly executable `servercopy_cron` Python wrapper. It
-prevents overlapping wrapper runs, invokes `servercopy`, sends a macOS Messages
-notification only when synchronization fails, and stages and commits the
+prevents overlapping wrapper runs, reports start, success, and failure lifecycle
+pings to Healthchecks.io, invokes `servercopy`, and stages and commits the
 separate `$MERMAID/servers` repository only after `servercopy` exits
-successfully. It never pushes.
+successfully. Healthchecks.io detects missed or unfinished executions and
+delivers alerts through its configured integrations. The wrapper never pushes
+or delivers human-facing alerts itself.
 
 `servercopy_rudics.zsh` remains temporarily available for rollout comparison.
 Remove it after the combined workflow completes a successful RUDICS check,
@@ -325,8 +327,8 @@ with no runnable sources also exits nonzero.
 An advisory lock at `<output>/_runs/servercopy.lock` prevents overlapping normal
 and dry-run `servercopy` invocations. The scheduled wrapper also holds
 `$MERMAID/logs/servercopy_cron.lock` across synchronization and Git handling. An
-overlapping wrapper exits nonzero without running synchronization, Git, or
-Messages.
+overlapping wrapper exits nonzero without loading monitoring configuration,
+sending a Healthchecks.io ping, running synchronization, or using Git.
 
 ## Cron
 
@@ -348,27 +350,71 @@ MERMAID=/Users/jdsimon/mermaid
 30 7,15,23 * * * /Users/jdsimon/programs/mermaid-ops/servercopy_cron >> /Users/jdsimon/mermaid/logs/servercopy_cron.log 2>&1
 ```
 
-Failure recipients are stored locally in the Git-ignored private file
-`data/notification_recipients.txt`, one E.164 number per line. Blank lines and
-lines beginning with `#` are ignored. For example, using an intentionally
-fictitious number:
+### Healthchecks.io execution monitoring
+
+Monitoring configuration is required for scheduled wrapper runs. Create the
+Git-ignored private file:
 
 ```text
-# Private local notification recipients
-+12025550123
+data/healthchecks_uuid.txt
 ```
 
-The file contains private phone numbers and must remain untracked. Its contents
-must remain absent from logs, documentation, and test fixtures. Notifications
-use macOS Messages through `osascript`; Messages must be configured for the
-cron user and macOS may require Automation permission.
+It must contain exactly one Healthchecks.io Check UUID. Surrounding whitespace,
+blank lines, and comment lines whose first non-whitespace character is `#` are
+permitted. For example, the UUID below is deliberately synthetic and must be
+replaced:
 
-If synchronization fails, partial downloads remain uncommitted, notification
-is attempted, and no Git command is run. The next scheduled run proceeds
-normally. After `servercopy` exits successfully, the wrapper refuses a
-pre-staged index, runs `git add -A`, creates a UTC-dated `servercopy [cron]`
-commit only when changes exist, and does not push. Git failures exit nonzero
-without sending the synchronization-failure text or attempting a reset.
+```text
+# Private Healthchecks.io Check UUID
+11111111-2222-3333-4444-555555555555
+```
+
+Treat the UUID as private because anyone who has it can forge lifecycle pings.
+Keep the file untracked and restrict its permissions:
+
+```sh
+chmod 600 data/healthchecks_uuid.txt
+```
+
+The wrapper constructs the Ping URLs internally from `https://hc-ping.com`; do
+not store a complete URL in the file. It sends empty HTTP POST requests with a
+finite timeout:
+
+```text
+start     https://hc-ping.com/<check-uuid>/start
+success   https://hc-ping.com/<check-uuid>
+failure   https://hc-ping.com/<check-uuid>/fail
+```
+
+After obtaining its non-overlap lock and loading the UUID, the wrapper requires
+the start ping to succeed before it runs `servercopy`. A failed start ping exits
+nonzero without synchronization or Git activity. A `servercopy` or Git failure
+sends the failure ping and retains the underlying nonzero status; a secondary
+failure-ping error is reported without replacing that status. A successful
+no-change run and a successful committed run both send the success ping. If the
+final success ping fails, the wrapper exits nonzero but does not undo completed
+Git work. Pings are not retried.
+
+Create a Healthchecks.io Check with the same cron expression used by the host:
+
+```cron
+30 7,15,23 * * *
+```
+
+Set the Check timezone to the cron host's timezone and choose a Grace Time
+longer than the longest legitimate `servercopy_cron` runtime. This allows
+Healthchecks.io to detect both missed schedules and runs that send `/start` but
+never send a terminal success or failure signal. Configure human-facing alerts
+through Healthchecks.io Integrations. Telegram may be selected there, but this
+repository does not configure Telegram and contains no Telegram bot token or
+chat ID.
+
+If synchronization fails, partial downloads remain uncommitted and no Git
+command is run. The next cron invocation proceeds at its normal scheduled time.
+After `servercopy` exits successfully, the wrapper refuses a pre-staged index,
+runs `git add -A`, creates a UTC-dated `servercopy [cron]` commit only when
+changes exist, and does not push. Git failures send the failure ping and exit
+nonzero without attempting a reset.
 The wrapper follows the existing `servercopy` exit contract, including its
 documented missing-credential skip behavior, and does not parse transfer output
 to redefine success. Do not run `servercopy` manually while a scheduled wrapper
@@ -383,29 +429,30 @@ for the complete policy and exit behavior.
 - Python 3.14
 - `lftp`
 - Git
-- macOS Messages and `osascript` for failure notifications
+- Outbound HTTPS and DNS access to `hc-ping.com` for execution monitoring
 - `MERMAID` set in the environment
 - Readable `data/servercopy_sources.csv`
 - Readable protected credentials at the configured path
 - Writable output root, defaulting to `~/mermaid/servers/`
 - A Git working tree rooted at `$MERMAID/servers` for scheduled runs
-- A private, untracked `data/notification_recipients.txt` for failure texts
+- A private, untracked `data/healthchecks_uuid.txt` containing one Check UUID
 
 ## Tests
 
 The test suite checks numbered-suffix discovery, parsing and contiguity,
 the hardcoded fixed suffix tuple, recovered lftp command shape, generic SFTP and
 FTPS behavior, dry-run generation, output suppression and redaction,
-heartbeats, silence termination, notification privacy, wrapper locking, and
-conservative Git policy:
+heartbeats, silence termination, private UUID parsing, Healthchecks.io lifecycle
+ordering and failure policy, wrapper locking, and conservative Git policy:
 
 ```sh
 python3.14 -m unittest discover -s tests -v
 ```
 
-The tests use synthetic data and mocked lftp, Messages, servercopy, and Git
-processes. They do not contact remote servers, send notifications, inspect the
-private recipient file, or modify the live servers repository.
+The tests use synthetic data and mocked lftp, Healthchecks.io HTTP requests,
+`servercopy`, and Git processes. They do not contact remote servers or
+Healthchecks.io, read ignored private files, or modify the live servers
+repository.
 
 ## Safety notes
 
@@ -414,7 +461,8 @@ private recipient file, or modify the live servers repository.
 - Treat `--dry-run` as an authenticated remote operation.
 - Normal mirrors may modify files beneath `<output>/<user>/`.
 - Remote deletions do not remove local files.
-- Credentials and private notification recipients must not be committed.
+- Credentials and the private Healthchecks.io Check UUID must not be committed
+  or printed.
 - Mirrored data is committed only in the separate `$MERMAID/servers` repository
   by `servercopy_cron`, and only after `servercopy` exits successfully.
 - Failed or partial synchronization output remains uncommitted.
