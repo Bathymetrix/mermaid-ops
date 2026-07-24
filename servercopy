@@ -20,7 +20,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.7.0"
+SERVERCOPY_VERSION = "1.8.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (
@@ -42,6 +42,10 @@ FIXED_SYNC_SUFFIXES = (
     ".S61",
 )
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
+CONNECTION_TIMEOUT = re.compile(
+    r"\bconnect to host \S+ port [0-9]+: (?:operation|connection) timed out\b",
+    re.IGNORECASE,
+)
 HEARTBEAT_SECONDS = 30.0
 LFTP_SILENCE_TIMEOUT_SECONDS = 900.0
 LFTP_DIAGNOSTIC_PREFIXES = (
@@ -452,6 +456,13 @@ def lftp_failure_detail(code: int, lines: list[str]) -> str:
     return "\n".join(detail)
 
 
+def is_connection_timeout_failure(detail: str) -> bool:
+    """Return whether the final failure diagnostic is a connection timeout."""
+
+    lines = [line for line in detail.splitlines() if line]
+    return bool(lines and CONNECTION_TIMEOUT.search(lines[-1]))
+
+
 def discover_remote_numbered_suffixes(
     executable: str,
     source: Source,
@@ -579,59 +590,68 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         report.write(f"[{label}] remote-root={source.remote_root}")
         report.write(f"[{label}] destination={destination}")
 
-        discovery_started = time.monotonic()
-        try:
-            numbered_suffixes = discover_remote_numbered_suffixes(
+        def synchronize_once() -> str | None:
+            discovery_started = time.monotonic()
+            try:
+                numbered_suffixes = discover_remote_numbered_suffixes(
+                    lftp,
+                    source,
+                    credentials[source.login],
+                    report,
+                    label,
+                )
+            except ConfigError as error:
+                report.write(
+                    f"[{label}] result=failure user={source.user} stage=discovery "
+                    f"elapsed={int(time.monotonic() - discovery_started)}s"
+                )
+                return str(error)
+
+            report.write(
+                f"[{label}] lftp mirror "
+                f"{'preview' if args.dry_run else 'output'} follows:"
+            )
+            lftp_started = time.monotonic()
+            code, lines = run_lftp(
                 lftp,
-                source,
-                credentials[source.login],
+                build_lftp_script(
+                    source,
+                    credentials[source.login],
+                    destination,
+                    args.dry_run,
+                    numbered_suffixes,
+                ),
                 report,
                 label,
+                source.user,
             )
-        except ConfigError as error:
+            warnings.extend(
+                f"Warning: {source.user}: {line.removeprefix('Warning:').lstrip()}"
+                for line in lines
+                if line.lower().startswith("warning:")
+            )
+            result = "success" if code == 0 else "failure"
             report.write(
-                f"[{label}] result=failure user={source.user} stage=discovery "
-                f"elapsed={int(time.monotonic() - discovery_started)}s"
+                f"[{label}] result={result} user={source.user} "
+                f"lftp-exit={code} elapsed={int(time.monotonic() - lftp_started)}s"
             )
-            fail(source.user, str(error))
+            return None if code == 0 else lftp_failure_detail(code, lines)
+
+        failure_detail = synchronize_once()
+        if failure_detail and is_connection_timeout_failure(failure_detail):
+            report.write(f"[{label}] connection timeout; retrying once after 60 s")
+            time.sleep(60)
+            failure_detail = synchronize_once()
+            report.write(
+                f"[{label}] retry {'failed' if failure_detail else 'succeeded'}"
+            )
+
+        if failure_detail:
+            fail(source.user, failure_detail)
             if not args.dry_run:
                 append_ledger(ledger, source.user, "failure", start)
-            report.write()
-            continue
-
-        report.write(f"[{label}] lftp mirror {'preview' if args.dry_run else 'output'} follows:")
-
-        lftp_started = time.monotonic()
-        code, lines = run_lftp(
-            lftp,
-            build_lftp_script(
-                source,
-                credentials[source.login],
-                destination,
-                args.dry_run,
-                numbered_suffixes,
-            ),
-            report,
-            label,
-            source.user,
-        )
-        warnings.extend(
-            f"Warning: {source.user}: {line.removeprefix('Warning:').lstrip()}"
-            for line in lines
-            if line.lower().startswith("warning:")
-        )
-        result = "success" if code == 0 else "failure"
-        report.write(
-            f"[{label}] result={result} user={source.user} "
-            f"lftp-exit={code} elapsed={int(time.monotonic() - lftp_started)}s"
-        )
-        if code == 0:
-            if not args.dry_run:
-                append_ledger(ledger, source.user, "success", start, utc_now())
-        else:
-            fail(source.user, lftp_failure_detail(code, lines))
-            if not args.dry_run:
-                append_ledger(ledger, source.user, "failure", start)
+        elif not args.dry_run:
+            append_ledger(ledger, source.user, "success", start, utc_now())
         report.write()
 
     report.write("##########################################################")

@@ -464,6 +464,96 @@ class CommandTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def run_sync_with_lftp_results(
+        self, results: list[tuple[int, list[str]]]
+    ) -> tuple[int, MagicMock, MagicMock, MagicMock, MagicMock]:
+        source = rudics_source()
+        args = servercopy.parse_args(
+            ["--dry-run", "--user", source.user, "--output", "/tmp/servercopy-test"]
+        )
+        report = MagicMock()
+
+        with (
+            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
+            patch.object(servercopy, "load_sources", return_value=[source]),
+            patch.object(
+                servercopy,
+                "load_credentials",
+                return_value={source.login: "fake-password"},
+            ),
+            patch.object(
+                servercopy, "discover_remote_numbered_suffixes", return_value=()
+            ) as discover,
+            patch.object(servercopy, "run_lftp", side_effect=results) as run_lftp,
+            patch.object(servercopy.time, "sleep") as sleep,
+            patch.dict(servercopy.os.environ, {}, clear=True),
+        ):
+            code = servercopy.run_workflow(args, Path("/unused"), report)
+
+        return code, report, discover, run_lftp, sleep
+
+    def test_connection_timeout_retries_user_once_then_succeeds(self) -> None:
+        timeout = (
+            "connect to host rudics.thorium.cls.fr port 22: Operation timed out"
+        )
+
+        code, report, discover, run_lftp, sleep = self.run_sync_with_lftp_results(
+            [(1, [timeout]), (0, [])]
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(discover.call_count, 2)
+        self.assertEqual(run_lftp.call_count, 2)
+        sleep.assert_called_once_with(60)
+        report.write.assert_any_call(
+            "[dry-run] connection timeout; retrying once after 60 s"
+        )
+        report.write.assert_any_call("[dry-run] retry succeeded")
+
+    def test_connection_timeout_retries_user_once_then_fails(self) -> None:
+        timeout = (
+            "connect to host rudics.thorium.cls.fr port 22: Operation timed out"
+        )
+
+        code, report, discover, run_lftp, sleep = self.run_sync_with_lftp_results(
+            [(1, [timeout]), (1, [timeout])]
+        )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(discover.call_count, 2)
+        self.assertEqual(run_lftp.call_count, 2)
+        sleep.assert_called_once_with(60)
+        report.write.assert_any_call("[dry-run] retry failed")
+        report.write.assert_any_call(f"    {timeout}", error=True)
+
+    def test_authentication_failure_does_not_retry(self) -> None:
+        code, report, discover, run_lftp, sleep = self.run_sync_with_lftp_results(
+            [(1, ["open: Login failed: Authentication failed"])]
+        )
+
+        self.assertEqual(code, 1)
+        discover.assert_called_once()
+        run_lftp.assert_called_once()
+        sleep.assert_not_called()
+        self.assertNotIn(
+            "[dry-run] connection timeout; retrying once after 60 s",
+            [call.args[0] for call in report.write.call_args_list if call.args],
+        )
+
+    def test_non_timeout_failure_does_not_retry(self) -> None:
+        code, report, discover, run_lftp, sleep = self.run_sync_with_lftp_results(
+            [(1, ["mirror: Access failed: Permission denied"])]
+        )
+
+        self.assertEqual(code, 1)
+        discover.assert_called_once()
+        run_lftp.assert_called_once()
+        sleep.assert_not_called()
+        self.assertNotIn(
+            "[dry-run] connection timeout; retrying once after 60 s",
+            [call.args[0] for call in report.write.call_args_list if call.args],
+        )
+
     def test_sftp_source_discovers_then_receives_numbered_mirror_suffixes(self) -> None:
         source = rudics_source()
         args = servercopy.parse_args(
