@@ -97,5 +97,6 @@ exit
   fast or complete; large directory scans may still take considerable time.
 
 - These commands are intended only for diagnostics and interactive inspection.
-  Routine synchronization should be performed with `servercopy`.
+  Manual synchronization should be performed with `servercopy`; scheduled
+  synchronization should use `servercopy_cron`.
   

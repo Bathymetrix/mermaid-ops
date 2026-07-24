@@ -411,7 +411,9 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(overridden.output.expanduser(), Path.home() / "alternate-servers")
 
     def test_source_registry_uses_endpoint_fields_only(self) -> None:
-        sources = servercopy.load_sources(SCRIPT.with_name("servercopy_sources.csv"))
+        sources = servercopy.load_sources(
+            SCRIPT.with_name("data") / "servercopy_sources.csv"
+        )
 
         self.assertEqual(len(sources), 20)
         self.assertEqual(sources[-1].user, "kobeuni")

@@ -2,11 +2,17 @@
 
 Operational scripts for MERMAID data and server workflows.
 
-The canonical server-copy workflow is the directly executable `servercopy`
+The canonical synchronization engine is the directly executable `servercopy`
 Python script. It mirrors configured remote content into per-user directories,
 records each attempt in an append-only CSV ledger, and writes combined
-stdout/stderr transcripts for cron diagnostics. It does not delete local mirror
-files, commit copied data to Git, convert VIT files, or run exports.
+stdout/stderr transcripts. It does not delete local mirror files, commit copied
+data to Git, convert VIT files, or run exports.
+
+Scheduled runs use the directly executable `servercopy_cron` Python wrapper. It
+prevents overlapping wrapper runs, invokes `servercopy`, sends a macOS Messages
+notification only when synchronization fails, and stages and commits the
+separate `$MERMAID/servers` repository only after `servercopy` exits
+successfully. It never pushes.
 
 `servercopy_rudics.zsh` remains temporarily available for rollout comparison.
 Remove it after the combined workflow completes a successful RUDICS check,
@@ -17,7 +23,7 @@ remote preview, normal mirror, and output review.
 Non-secret source definitions are stored in the tracked file:
 
 ```text
-servercopy_sources.csv
+data/servercopy_sources.csv
 ```
 
 Columns:
@@ -171,7 +177,7 @@ A later attempt to replace the suffix passes with one complete recursive mirror
 was also rejected after testing. Numbered-suffix discovery uses one lightweight
 directory listing and then preserves the proven per-suffix mirror shape; it
 does not use a whole-tree mirror to inspect the source. See
-[`SERVERCOPY_COMPLETE_MIRROR_EXPERIMENT.md`](SERVERCOPY_COMPLETE_MIRROR_EXPERIMENT.md)
+[`servercopy_complete_mirror_experiment.md`](docs/servercopy_complete_mirror_experiment.md)
 for the engineering decision and observed evidence.
 
 On `kobeuni`, silent periods of five minutes or more before lftp begins
@@ -209,6 +215,17 @@ interoperability rather than general reachability, credentials, or remote-root
 validity.
 
 ## Usage
+
+Use `servercopy` directly for manual synchronization, checks, and authenticated
+previews. Use `servercopy_cron` for the scheduled synchronization-and-commit
+workflow documented below.
+
+Show the wrapper's independent operational version without starting a run:
+
+```sh
+./servercopy_cron --version
+./servercopy_cron -v
+```
 
 Normal mirror of all configured users:
 
@@ -306,45 +323,89 @@ local configuration still exits nonzero before transfer attempts begin; a run
 with no runnable sources also exits nonzero.
 
 An advisory lock at `<output>/_runs/servercopy.lock` prevents overlapping normal
-and dry-run invocations. This is intended for unattended cron use.
+and dry-run `servercopy` invocations. The scheduled wrapper also holds
+`$MERMAID/logs/servercopy_cron.lock` across synchronization and Git handling. An
+overlapping wrapper exits nonzero without running synchronization, Git, or
+Messages.
 
 ## Cron
 
-Cron must provide `MERMAID` and a `PATH` containing Python 3.14 and `lftp`. For
-the current Homebrew installation, the command environment can use:
+Cron must invoke `servercopy_cron`, not `servercopy` directly. The wrapper
+requires `MERMAID`, derives the destination as `$MERMAID/servers`, and passes
+servercopy output through live to cron's redirection. Create the log directory
+once before installing the entry because the shell opens the log before the
+wrapper starts:
 
 ```sh
-MERMAID=/Users/jdsimon/mermaid
-PATH=/opt/homebrew/bin:/usr/bin:/bin
-/Users/jdsimon/programs/mermaid-ops/servercopy \
-  --output /Users/jdsimon/mermaid/servers
+mkdir -p /Users/jdsimon/mermaid/logs
 ```
 
-Keep cron's own mail or redirection enabled as an additional alerting channel.
-The `_runs` transcript remains the detailed diagnostic record.
+The scheduled command is:
+
+```cron
+PATH=/opt/homebrew/bin:/usr/bin:/bin
+MERMAID=/Users/jdsimon/mermaid
+30 7,15,23 * * * /Users/jdsimon/programs/mermaid-ops/servercopy_cron >> /Users/jdsimon/mermaid/logs/servercopy_cron.log 2>&1
+```
+
+Failure recipients are stored locally in the Git-ignored private file
+`data/notification_recipients.txt`, one E.164 number per line. Blank lines and
+lines beginning with `#` are ignored. For example, using an intentionally
+fictitious number:
+
+```text
+# Private local notification recipients
++12025550123
+```
+
+The file contains private phone numbers and must remain untracked. Its contents
+must remain absent from logs, documentation, and test fixtures. Notifications
+use macOS Messages through `osascript`; Messages must be configured for the
+cron user and macOS may require Automation permission.
+
+If synchronization fails, partial downloads remain uncommitted, notification
+is attempted, and no Git command is run. The next scheduled run proceeds
+normally. After `servercopy` exits successfully, the wrapper refuses a
+pre-staged index, runs `git add -A`, creates a UTC-dated `servercopy [cron]`
+commit only when changes exist, and does not push. Git failures exit nonzero
+without sending the synchronization-failure text or attempting a reset.
+The wrapper follows the existing `servercopy` exit contract, including its
+documented missing-credential skip behavior, and does not parse transfer output
+to redefine success. Do not run `servercopy` manually while a scheduled wrapper
+may be in its synchronization-and-Git cycle.
+
+See
+[`docs/servercopy_cron_workflow.md`](docs/servercopy_cron_workflow.md)
+for the complete policy and exit behavior.
 
 ## Requirements
 
 - Python 3.14
 - `lftp`
+- Git
+- macOS Messages and `osascript` for failure notifications
 - `MERMAID` set in the environment
-- Readable `servercopy_sources.csv` beside the executable
+- Readable `data/servercopy_sources.csv`
 - Readable protected credentials at the configured path
 - Writable output root, defaulting to `~/mermaid/servers/`
+- A Git working tree rooted at `$MERMAID/servers` for scheduled runs
+- A private, untracked `data/notification_recipients.txt` for failure texts
 
 ## Tests
 
 The test suite checks numbered-suffix discovery, parsing and contiguity,
 the hardcoded fixed suffix tuple, recovered lftp command shape, generic SFTP and
 FTPS behavior, dry-run generation, output suppression and redaction,
-heartbeats, and silence termination:
+heartbeats, silence termination, notification privacy, wrapper locking, and
+conservative Git policy:
 
 ```sh
 python3.14 -m unittest discover -s tests -v
 ```
 
-The tests use fake credentials and mocked lftp processes. They do not contact
-remote servers.
+The tests use synthetic data and mocked lftp, Messages, servercopy, and Git
+processes. They do not contact remote servers, send notifications, inspect the
+private recipient file, or modify the live servers repository.
 
 ## Safety notes
 
@@ -353,5 +414,8 @@ remote servers.
 - Treat `--dry-run` as an authenticated remote operation.
 - Normal mirrors may modify files beneath `<output>/<user>/`.
 - Remote deletions do not remove local files.
-- Credentials, generated server data, and local sync output must not be
-  committed.
+- Credentials and private notification recipients must not be committed.
+- Mirrored data is committed only in the separate `$MERMAID/servers` repository
+  by `servercopy_cron`, and only after `servercopy` exits successfully.
+- Failed or partial synchronization output remains uncommitted.
+- The wrapper does not push.

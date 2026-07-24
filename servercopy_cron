@@ -1,0 +1,272 @@
+#!/usr/bin/env python3.14
+"""Run servercopy for cron and commit only successful runs."""
+
+from __future__ import annotations
+
+import argparse
+from datetime import UTC, datetime
+import fcntl
+import os
+from pathlib import Path
+import re
+import socket
+import subprocess
+import sys
+
+
+SERVERCOPY_CRON_VERSION = "1.0.0"
+E164_RECIPIENT = re.compile(r"\+[1-9][0-9]{1,14}\Z")
+MESSAGES_SCRIPT = """
+on run argv
+    set recipient_address to item 1 of argv
+    set notification_text to item 2 of argv
+    tell application "Messages"
+        set target_service to first service whose service type = iMessage
+        set target_buddy to buddy recipient_address of target_service
+        send notification_text to target_buddy
+    end tell
+end run
+""".strip()
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run servercopy and commit a successful scheduled synchronization."
+    )
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"servercopy_cron {SERVERCOPY_CRON_VERSION}",
+    )
+    return parser.parse_args(argv)
+
+
+def load_recipients(path: Path) -> list[str]:
+    """Load usable E.164 recipients without reporting their values."""
+
+    recipients: list[str] = []
+    with path.open(encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if E164_RECIPIENT.fullmatch(line):
+                recipients.append(line)
+    return recipients
+
+
+def send_failure_notifications(path: Path, message: str) -> None:
+    """Attempt one macOS Messages notification per configured recipient."""
+
+    try:
+        recipients = load_recipients(path)
+    except (OSError, UnicodeError):
+        print(
+            "Error: servercopy failed, and notifications could not be sent because "
+            "the recipient file could not be read.",
+            file=sys.stderr,
+        )
+        return
+
+    if not recipients:
+        print(
+            "Error: servercopy failed, and notifications could not be sent because "
+            "no usable recipients are configured.",
+            file=sys.stderr,
+        )
+        return
+
+    for recipient in recipients:
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", MESSAGES_SCRIPT, recipient, message],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            print(
+                "Error: a Messages notification could not be started for one "
+                "configured recipient.",
+                file=sys.stderr,
+            )
+            continue
+        if result.returncode != 0:
+            print(
+                "Error: a Messages notification failed for one configured recipient "
+                f"(osascript exit status {result.returncode}).",
+                file=sys.stderr,
+            )
+
+
+def run_servercopy(command: Path, servers_repository: Path) -> int:
+    """Run servercopy with live inherited output and return its status."""
+
+    try:
+        result = subprocess.run(
+            [str(command), "--output", str(servers_repository)],
+            check=False,
+        )
+    except OSError as error:
+        print(f"Error: could not start servercopy: {error}", file=sys.stderr)
+        return 1
+    return result.returncode
+
+
+def run_git(
+    repository: Path, *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def commit_synced_changes(servers_repository: Path) -> int:
+    """Stage and commit after a successful servercopy run."""
+
+    try:
+        worktree = run_git(servers_repository, "rev-parse", "--show-toplevel")
+        if worktree.returncode != 0 or not worktree.stdout.strip():
+            print(
+                "Error: the servers directory is not a Git working tree.",
+                file=sys.stderr,
+            )
+            return 1
+        if Path(worktree.stdout.strip()).resolve() != servers_repository.resolve():
+            print(
+                "Error: the servers directory is not the root of its Git working tree.",
+                file=sys.stderr,
+            )
+            return 1
+
+        initial_index = run_git(
+            servers_repository, "diff", "--cached", "--quiet", "--exit-code"
+        )
+        if initial_index.returncode == 1:
+            print(
+                "Error: refusing to stage or commit because the servers Git index "
+                "already contains staged changes.",
+                file=sys.stderr,
+            )
+            return 1
+        if initial_index.returncode != 0:
+            print(
+                "Error: could not inspect the servers Git index "
+                f"(git exit status {initial_index.returncode}).",
+                file=sys.stderr,
+            )
+            return 1
+
+        staged = run_git(servers_repository, "add", "-A")
+        if staged.returncode != 0:
+            print(
+                f"Error: git add failed (exit status {staged.returncode}).",
+                file=sys.stderr,
+            )
+            return 1
+
+        updated_index = run_git(
+            servers_repository, "diff", "--cached", "--quiet", "--exit-code"
+        )
+        if updated_index.returncode == 0:
+            print("servercopy completed successfully; no changes to commit.")
+            return 0
+        if updated_index.returncode != 1:
+            print(
+                "Error: could not inspect the staged server changes "
+                f"(git exit status {updated_index.returncode}).",
+                file=sys.stderr,
+            )
+            return 1
+
+        message = f"servercopy [cron]: {utc_now()}"
+        committed = run_git(servers_repository, "commit", "-m", message)
+        if committed.returncode != 0:
+            print(
+                f"Error: git commit failed (exit status {committed.returncode}).",
+                file=sys.stderr,
+            )
+            return 1
+    except OSError as error:
+        print(f"Error: could not run Git: {error}", file=sys.stderr)
+        return 1
+
+    print(f"Committed synchronized server changes: {message}")
+    return 0
+
+
+def run_cron_workflow(
+    servercopy_command: Path,
+    servers_repository: Path,
+    recipient_path: Path,
+) -> int:
+    servercopy_status = run_servercopy(servercopy_command, servers_repository)
+    if servercopy_status != 0:
+        hostname = socket.gethostname() or "unknown host"
+        message = (
+            f"servercopy failed on {hostname}. Partial downloads were left "
+            "uncommitted. Check servercopy_cron.log."
+        )
+        send_failure_notifications(recipient_path, message)
+        return servercopy_status
+
+    return commit_synced_changes(servers_repository)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parse_args(argv)
+    mermaid = os.environ.get("MERMAID")
+    if not mermaid:
+        print("Error: MERMAID must be set before running this script.", file=sys.stderr)
+        return 1
+
+    mermaid_root = Path(mermaid)
+    repository_root = Path(__file__).resolve().parent
+    servers_repository = mermaid_root / "servers"
+    recipient_path = repository_root / "data" / "notification_recipients.txt"
+    servercopy_command = repository_root / "servercopy"
+    lock_path = mermaid_root / "logs" / "servercopy_cron.lock"
+
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = lock_path.open("a", encoding="ascii")
+    except OSError as error:
+        print(
+            f"Error: could not prepare the servercopy_cron lock: {error}",
+            file=sys.stderr,
+        )
+        return 1
+
+    with lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(
+                "Error: another servercopy_cron invocation is already running.",
+                file=sys.stderr,
+            )
+            return 1
+        except OSError as error:
+            print(
+                f"Error: could not acquire the servercopy_cron lock: {error}",
+                file=sys.stderr,
+            )
+            return 1
+
+        return run_cron_workflow(
+            servercopy_command,
+            servers_repository,
+            recipient_path,
+        )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
