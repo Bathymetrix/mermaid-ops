@@ -1,7 +1,7 @@
 user,login,protocol,host,port,remote_root
 s_mermaid,s_mermaid,sftp,rudics.thorium.cls.fr,22,.
 s_psdmaid,s_psdmaid,sftp,rudics.thorium.cls.fr,22,.
-s_m0056,s_m0056,sftp,rudics.thorium.cls.fr,22,.
+#s_m0056,s_m0056,sftp,rudics.thorium.cls.fr,22,. [dead]
 s_m0057,s_m0057,sftp,rudics.thorium.cls.fr,22,.
 s_m0075,s_m0075,sftp,rudics.thorium.cls.fr,22,.
 s_m0076,s_m0076,sftp,rudics.thorium.cls.fr,22,.
