@@ -326,7 +326,7 @@ class SubprocessTests(unittest.TestCase):
 
         self.assertEqual(version, SERVERCOPY_VERSION)
         run.assert_called_once_with(
-            ["/repo/servercopy", "--version"],
+            [sys.executable, "/repo/servercopy", "--version"],
             check=False,
             capture_output=True,
             text=True,
@@ -403,7 +403,12 @@ class SubprocessTests(unittest.TestCase):
         arguments, keywords = popen.call_args
         self.assertEqual(
             arguments[0],
-            ["/repo/servercopy", "--output", "/mermaid/servers"],
+            [
+                sys.executable,
+                "/repo/servercopy",
+                "--output",
+                "/mermaid/servers",
+            ],
         )
         self.assertIs(keywords["stdout"], subprocess.PIPE)
         self.assertIs(keywords["stderr"], subprocess.PIPE)
@@ -466,7 +471,10 @@ class GitPreflightTests(unittest.TestCase):
                 error = error_output.getvalue()
                 self.assertIn("requires a completely clean", error)
                 self.assertIn(porcelain.strip(), error)
-                self.assertIn("Commit, stash, or remove", error)
+                self.assertIn(
+                    "commit legitimate synchronization results",
+                    error,
+                )
 
     def test_non_git_directory_reports_git_stderr(self) -> None:
         error_output = StringIO()
@@ -1090,7 +1098,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.4.1]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.2]",
                 "failure",
             ],
         )
@@ -1233,7 +1241,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.4.1]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.2]",
                 "success",
             ],
         )
@@ -1294,7 +1302,7 @@ class WorkflowTests(unittest.TestCase):
                 "commit",
                 "-m",
                 "servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.4.1]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.2]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)
@@ -1544,7 +1552,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.4.1\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.4.2\n")
                 load_uuid.assert_not_called()
                 logged_workflow.assert_not_called()
                 flock.assert_not_called()
@@ -1885,7 +1893,7 @@ class MainTests(unittest.TestCase):
             transcript_text = logs[0].read_text(encoding="utf-8")
             for expected in (
                 "servercopy_cron started: 2026-07-27T19:56:50Z",
-                "servercopy_cron version: 2.4.1",
+                "servercopy_cron version: 2.4.2",
                 "invocation: operator@host.example.org",
                 "system: TestOS-1.0",
                 f"MERMAID: {mermaid_root}",

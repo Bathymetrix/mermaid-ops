@@ -1,3 +1,6 @@
 __pycache__/
 *.py[cod]
 data/healthchecks_uuid.txt
+._*
+*~
+/mermaid-ops.tar

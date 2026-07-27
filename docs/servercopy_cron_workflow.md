@@ -3,9 +3,9 @@
 ## Overview
 
 `servercopy` remains responsible only for synchronization. The cron job invokes
-the directly executable Python 3.12 wrapper `servercopy_cron`, which adds the
-small amount of operational policy needed around a scheduled run and reports
-the lifecycle of the complete workflow to Healthchecks.io:
+the Python 3.12 wrapper `servercopy_cron`, which adds the small amount of
+operational policy needed around a scheduled run and reports the lifecycle of
+the complete workflow to Healthchecks.io:
 
 ```text
 cron invokes servercopy_cron
@@ -71,6 +71,21 @@ servercopy command    <mermaid-ops repository>/servercopy
 monitoring UUID file  <mermaid-ops repository>/data/healthchecks_uuid.txt
 ```
 
+Production is `frisius.princeton.edu`, with these resolved paths:
+
+```text
+repository            /home/jdsimon/programs/mermaid-ops
+MERMAID                /home/jdsimon/mermaid
+Python                 /home/jdsimon/miniforge3/envs/python3.12/bin/python3
+workflow logs          /home/jdsimon/mermaid/logs/servercopy_cron/
+outer cron log         /home/jdsimon/mermaid/logs/servercopy_cron_cron.log
+lock                   /home/jdsimon/mermaid/logs/servercopy_cron.lock
+monitoring UUID file   /home/jdsimon/programs/mermaid-ops/data/healthchecks_uuid.txt
+```
+
+See [`frisius_installation.md`](frisius_installation.md) for installation,
+configuration, verification, and the complete production crontab.
+
 The repository-local paths are resolved from `servercopy_cron` itself.
 `servercopy_cron --version` (or `-v`) reports the wrapper's independent
 operational version without requiring `MERMAID`, loading monitoring
@@ -131,7 +146,10 @@ log, flushing each write promptly. It also copies `servercopy` stdout and stderr
 through live, line-buffered streams, so interactive output remains visible
 during long synchronizations. The transcript includes wrapper, synchronization,
 Git, and Healthchecks diagnostics plus the final workflow exit status. No
-external `tee` command or crontab redirection is used.
+external `tee` command is used. The production crontab separately appends
+launcher output to
+`/home/jdsimon/mermaid/logs/servercopy_cron_cron.log` so cron-startup and
+pre-wrapper failures have an outer diagnostic.
 
 This boundary precedes lock-file preparation, lock acquisition, and monitoring
 configuration, so failures in those stages receive the same complete
@@ -212,7 +230,8 @@ Telegram, call the Telegram Bot API, or store a Telegram bot token or chat ID.
 ## Synchronization behavior
 
 After the start ping succeeds and `servercopy --version` returns a valid
-version, `servercopy` is invoked with:
+version, `servercopy` is invoked with the wrapper's current Python interpreter
+and:
 
 ```text
 --output $MERMAID/servers
@@ -221,7 +240,8 @@ version, `servercopy` is invoked with:
 Its stdout and stderr are copied concurrently to the live terminal streams and
 the current workflow transcript. `PYTHONUNBUFFERED=1` is set for the child
 process so output remains prompt while the long-running synchronization is in
-progress.
+progress. Production cron does not activate Conda; its explicit Miniforge
+interpreter therefore remains authoritative for both programs.
 
 If `servercopy` returns nonzero, the wrapper:
 
@@ -256,8 +276,9 @@ a completely clean Git working tree. It runs the legacy-compatible
 `git status --porcelain`, which reports staged changes, unstaged tracked
 changes, tracked deletions, and untracked files while omitting ignored files.
 If any changes are present, the wrapper prints the status output and directs
-the operator to commit, stash, or remove the changes. It then sends `/fail` and
-exits nonzero without running `servercopy`, staging files, or creating a commit.
+the operator to inspect the changes and commit legitimate synchronization
+results. It then sends `/fail` and exits nonzero without running `servercopy`,
+staging files, or creating a commit.
 Failure to inspect the repository follows the same monitored failure path and
 includes captured Git stderr when available.
 
@@ -278,7 +299,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.1]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.2]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
@@ -292,21 +313,17 @@ does not reset the index, remove lock files, roll back files, or otherwise
 attempt automatic recovery. A success-ping failure after completed Git work
 also exits nonzero but does not attempt a rollback or send `/fail`.
 
-## Crontab and Healthchecks.io Check setup
+## Production schedule and monitoring
 
-Use the wrapper, not `servercopy`, in crontab:
+Frisius runs the wrapper at 07:30, 15:30, and 23:30 in the host's local
+timezone. The canonical crontab is maintained in
+[`frisius_installation.md`](frisius_installation.md); it invokes the wrapper
+with the explicit Miniforge interpreter and appends launcher output to the
+outer cron log.
 
-```cron
-PATH=/opt/homebrew/bin:/usr/bin:/bin
-MERMAID=/Users/jdsimon/mermaid
-30 7,15,23 * * * /Users/jdsimon/programs/mermaid-ops/servercopy_cron
-```
-
-The existing cron command needs no monitoring environment variables because
-the wrapper reads its repository-local ignored UUID file. This schedule runs at
-07:30, 15:30, and 23:30 in the host's local timezone. The wrapper creates and
-flushes its own per-invocation logs; the crontab must not redirect output into a
-shared transcript.
+The cron command needs no monitoring environment variables because the wrapper
+reads its repository-local ignored UUID file. The outer cron log is not a
+replacement for the wrapper's promptly flushed, per-invocation workflow logs.
 
 Configure the Healthchecks.io Check with the actual cron expression:
 
@@ -345,3 +362,77 @@ schedule, Grace Time, or Integrations.
   Git work left intact and no failure ping.
 - Failure-ping failure: the original workflow failure status, with the
   secondary monitoring error reported generically.
+
+## Recovery
+
+Always begin with the timestamped workflow log for the failed invocation. If no
+workflow log exists, begin with the outer cron log.
+
+### Dirty repository or interrupted synchronization
+
+Inspect the servers repository before changing it:
+
+```sh
+git -C /home/jdsimon/mermaid/servers status
+git -C /home/jdsimon/mermaid/servers diff
+```
+
+An interrupted or failed synchronization may leave legitimate downloaded files
+uncommitted. Inspect those files and commit valid synchronization results before
+rerunning the wrapper. Do not delete or stash legitimate downloads merely to
+satisfy the clean-repository preflight.
+
+If files are invalid or unrelated to synchronization, resolve them deliberately
+according to their provenance. The wrapper performs no automatic reset,
+deletion, or rollback.
+
+### Active lock
+
+An overlap refusal usually means another wrapper invocation still owns
+`/home/jdsimon/mermaid/logs/servercopy_cron.lock`. Check for the active process
+and its current workflow log, then wait for it to finish. The lock is advisory
+and contains no PID; it is released automatically when the process exits. Do
+not delete the lock file as a recovery step.
+
+### Healthchecks.io failure
+
+A start-ping failure prevents synchronization. Correct DNS, outbound HTTPS, or
+Healthchecks.io configuration and rerun manually.
+
+A failure ping that itself fails does not replace the underlying workflow
+status. A success-ping failure occurs after synchronization and Git work have
+completed; inspect the workflow log and repository before rerunning, because a
+commit may already exist.
+
+### Remote synchronization failure
+
+Use the timestamped workflow log and the nested `servercopy` diagnostics to
+identify the logical user and failing stage. Partial downloads remain
+uncommitted. Correct the remote, network, or credential problem, inspect and
+commit any valid downloaded files as described above, and rerun manually.
+
+### Git failure
+
+Inspect both the workflow log and:
+
+```sh
+git -C /home/jdsimon/mermaid/servers status
+```
+
+Determine whether staging or a commit completed before the failure. Preserve
+valid synchronized data, repair the specific Git problem, and commit or clean
+the repository deliberately. The wrapper never resets the index, rewrites
+history, or pushes.
+
+### Cron startup failure
+
+If no timestamped workflow log was created, inspect:
+
+```text
+/home/jdsimon/mermaid/logs/servercopy_cron_cron.log
+```
+
+Verify the installed crontab, the explicit Miniforge interpreter, executable
+repository paths, `MERMAID`, permissions, and available disk space. After
+correcting the startup problem, run the exact cron command manually and confirm
+that a timestamped workflow log and Healthchecks.io lifecycle appear.
