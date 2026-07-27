@@ -1890,6 +1890,7 @@ class MainTests(unittest.TestCase):
                 "system: TestOS-1.0",
                 f"MERMAID: {mermaid_root}",
                 f"repository: {SCRIPT.parent}",
+                f"python: {sys.executable}",
                 f"command: {SCRIPT}",
                 f"log: {logs[0]}",
                 "wrapper stdout",

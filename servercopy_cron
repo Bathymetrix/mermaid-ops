@@ -661,6 +661,7 @@ def write_invocation_header(
     print(f"system: {platform.platform()}")
     print(f"MERMAID: {mermaid_root}")
     print(f"repository: {repository_root}")
+    print(f"python: {sys.executable}")
     print(f"command: {shlex.join(command)}")
     print(f"log: {log_path}")
 
