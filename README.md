@@ -333,21 +333,23 @@ sending a Healthchecks.io ping, running synchronization, or using Git.
 ## Cron
 
 Cron must invoke `servercopy_cron`, not `servercopy` directly. The wrapper
-requires `MERMAID`, derives the destination as `$MERMAID/servers`, and passes
-servercopy output through live to cron's redirection. Create the log directory
-once before installing the entry because the shell opens the log before the
-wrapper starts:
+requires `MERMAID`, derives the destination as `$MERMAID/servers`, and creates
+one UTC-timestamped transcript for every monitored workflow under:
 
-```sh
-mkdir -p /Users/jdsimon/mermaid/logs
+```text
+$MERMAID/logs/servercopy_cron/2026-07-27T19-56-50Z.log
 ```
+
+The wrapper internally duplicates its stdout and stderr, including live
+`servercopy` output, to both the terminal and this promptly flushed log. Cron
+does not perform logging or shell redirection.
 
 The scheduled command is:
 
 ```cron
 PATH=/opt/homebrew/bin:/usr/bin:/bin
 MERMAID=/Users/jdsimon/mermaid
-30 7,15,23 * * * /Users/jdsimon/programs/mermaid-ops/servercopy_cron >> /Users/jdsimon/mermaid/logs/servercopy_cron.log 2>&1
+30 7,15,23 * * * /Users/jdsimon/programs/mermaid-ops/servercopy_cron
 ```
 
 ### Healthchecks.io execution monitoring
@@ -377,14 +379,19 @@ chmod 600 data/healthchecks_uuid.txt
 ```
 
 The wrapper constructs the Ping URLs internally from `https://hc-ping.com`; do
-not store a complete URL in the file. It sends empty HTTP POST requests with a
-finite timeout:
+not store a complete URL in the file. It sends HTTP POST requests with a finite
+timeout:
 
 ```text
 start     https://hc-ping.com/<check-uuid>/start
 success   https://hc-ping.com/<check-uuid>
 failure   https://hc-ping.com/<check-uuid>/fail
 ```
+
+The start and success request bodies remain empty. Failure requests contain a
+bounded, concise diagnostic with the immediate reason, recent useful output,
+and the local transcript path when available. The complete transcript remains
+local and is never uploaded.
 
 After obtaining its non-overlap lock and loading the UUID, the wrapper requires
 the start ping to succeed before it runs `servercopy`. A failed start ping exits
@@ -424,7 +431,7 @@ changes exist. The message records the UTC timestamp and both independently
 versioned executables:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.2.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.3.0]
 ```
 
 `servercopy_cron` obtains the `servercopy` version through the latter's public

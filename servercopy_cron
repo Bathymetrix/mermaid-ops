@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 import fcntl
 from http.client import HTTPException
@@ -11,6 +12,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from threading import Lock, Thread
+from typing import TextIO
 from urllib.request import Request, urlopen
 from uuid import UUID
 
@@ -23,9 +26,10 @@ if sys.version_info < MIN_VERSION:
     )
 
 
-SERVERCOPY_CRON_VERSION = "2.2.0"
+SERVERCOPY_CRON_VERSION = "2.3.0"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
+FAILURE_EXCERPT_CHARACTERS = 2_000
 
 
 class HealthchecksConfigError(ValueError):
@@ -36,8 +40,60 @@ class HealthchecksPingError(RuntimeError):
     """A Healthchecks.io lifecycle ping that did not succeed."""
 
 
+class TeeStream:
+    """Duplicate one text stream to its terminal and the run transcript."""
+
+    def __init__(
+        self,
+        terminal: TextIO,
+        transcript: "RunTranscript",
+    ) -> None:
+        self.terminal = terminal
+        self.transcript = transcript
+
+    def write(self, text: str) -> int:
+        return self.transcript.write(self.terminal, text)
+
+    def flush(self) -> None:
+        self.transcript.flush(self.terminal)
+
+
+class RunTranscript:
+    """Coordinate live terminal output and one promptly flushed run log."""
+
+    def __init__(self, log: TextIO) -> None:
+        self.log = log
+        self.lock = Lock()
+        self.recent_output = ""
+        self.stdout = TeeStream(sys.stdout, self)
+        self.stderr = TeeStream(sys.stderr, self)
+
+    def write(self, terminal: TextIO, text: str) -> int:
+        with self.lock:
+            terminal.write(text)
+            terminal.flush()
+            self.log.write(text)
+            self.log.flush()
+            self.recent_output = (
+                self.recent_output + text
+            )[-FAILURE_EXCERPT_CHARACTERS:]
+        return len(text)
+
+    def flush(self, terminal: TextIO) -> None:
+        with self.lock:
+            terminal.flush()
+            self.log.flush()
+
+    def failure_excerpt(self) -> str:
+        return self.recent_output.strip()
+
+
 def utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def utc_log_filename() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ.log")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -87,12 +143,21 @@ def load_healthchecks_uuid(path: Path) -> str:
         ) from None
 
 
-def _send_healthchecks_ping(check_uuid: str, suffix: str) -> None:
-    """Send one empty POST and require an HTTP-success response."""
+def _send_healthchecks_ping(
+    check_uuid: str,
+    suffix: str,
+    message: str = "",
+) -> None:
+    """Send one POST and require an HTTP-success response."""
 
     request = Request(
         f"{HEALTHCHECKS_BASE_URL}/{check_uuid}{suffix}",
-        data=b"",
+        data=message.encode("utf-8"),
+        headers=(
+            {"Content-Type": "text/plain; charset=utf-8"}
+            if message
+            else {}
+        ),
         method="POST",
     )
     try:
@@ -120,17 +185,29 @@ def ping_success(check_uuid: str) -> None:
     _send_healthchecks_ping(check_uuid, "")
 
 
-def ping_failure(check_uuid: str) -> None:
+def ping_failure(check_uuid: str, message: str = "") -> None:
     """Report that a monitored run failed."""
 
-    _send_healthchecks_ping(check_uuid, "/fail")
+    _send_healthchecks_ping(check_uuid, "/fail", message)
 
 
-def finish_failed_run(check_uuid: str, workflow_status: int) -> int:
+def finish_failed_run(
+    check_uuid: str,
+    workflow_status: int,
+    reason: str,
+    log_path: Path | None = None,
+    transcript: RunTranscript | None = None,
+) -> int:
     """Attempt the failure ping without replacing the workflow status."""
 
+    message = f"servercopy_cron failed: {reason}"
+    if transcript and (excerpt := transcript.failure_excerpt()):
+        message = f"{message}\n\n{excerpt}"
+    if log_path:
+        message = f"{message}\n\nFull log:\n{log_path}"
+
     try:
-        ping_failure(check_uuid)
+        ping_failure(check_uuid, message)
     except HealthchecksPingError:
         print(
             "Error: the Healthchecks.io failure ping also failed; "
@@ -141,17 +218,52 @@ def finish_failed_run(check_uuid: str, workflow_status: int) -> int:
 
 
 def run_servercopy(command: Path, servers_repository: Path) -> int:
-    """Run servercopy with live inherited output and return its status."""
+    """Run servercopy with live output copied to stdout and stderr."""
 
     try:
-        result = subprocess.run(
+        environment = os.environ.copy()
+        environment["PYTHONUNBUFFERED"] = "1"
+        process = subprocess.Popen(
             [str(command), "--output", str(servers_repository)],
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=environment,
         )
     except OSError as error:
         print(f"Error: could not start servercopy: {error}", file=sys.stderr)
         return 1
-    return result.returncode
+
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    def copy_output(source: TextIO, destination: TextIO) -> None:
+        try:
+            for line in source:
+                destination.write(line)
+                destination.flush()
+        finally:
+            source.close()
+
+    stdout_reader = Thread(
+        target=copy_output,
+        args=(process.stdout, sys.stdout),
+        name="servercopy-cron-stdout",
+    )
+    stderr_reader = Thread(
+        target=copy_output,
+        args=(process.stderr, sys.stderr),
+        name="servercopy-cron-stderr",
+    )
+    stdout_reader.start()
+    stderr_reader.start()
+    status = process.wait()
+    stdout_reader.join()
+    stderr_reader.join()
+    return status
 
 
 def get_servercopy_version(command: Path) -> str | None:
@@ -177,6 +289,8 @@ def get_servercopy_version(command: Path) -> str | None:
             f"(exit status {result.returncode}).",
             file=sys.stderr,
         )
+        if error := result.stderr.strip():
+            print(f"servercopy reported: {error}", file=sys.stderr)
         return None
 
     output = result.stdout.strip()
@@ -221,7 +335,7 @@ def report_git_failure(
         print(f"Git reported: {error}", file=sys.stderr)
 
 
-def preflight_servers_repository(servers_repository: Path) -> int:
+def preflight_servers_repository(servers_repository: Path) -> str | None:
     """Require an exact, completely clean Git working-tree root."""
 
     try:
@@ -237,14 +351,14 @@ def preflight_servers_repository(servers_repository: Path) -> int:
                 "synchronization.",
                 worktree,
             )
-            return 1
+            return "servers directory is not a Git working-tree root."
         if Path(worktree.stdout.strip()).resolve() != servers_repository.resolve():
             print(
                 "Error: servercopy_cron requires the servers directory to be "
                 "the root of its Git working tree before synchronization.",
                 file=sys.stderr,
             )
-            return 1
+            return "servers directory is not the Git working-tree root."
 
         status = run_git(servers_repository, "status", "--porcelain")
         if status.returncode != 0:
@@ -253,10 +367,10 @@ def preflight_servers_repository(servers_repository: Path) -> int:
                 f"(git exit status {status.returncode}).",
                 status,
             )
-            return 1
+            return f"Git preflight failed (exit status {status.returncode})."
     except OSError as error:
         print(f"Error: could not run the Git preflight: {error}", file=sys.stderr)
-        return 1
+        return f"Git preflight could not run: {error}"
 
     if status.stdout:
         print(
@@ -270,9 +384,9 @@ def preflight_servers_repository(servers_repository: Path) -> int:
             "Commit, stash, or remove these changes before retrying.",
             file=sys.stderr,
         )
-        return 1
+        return "servers repository is not clean."
 
-    return 0
+    return None
 
 
 def commit_synced_changes(
@@ -360,6 +474,8 @@ def run_cron_workflow(
     servercopy_command: Path,
     servers_repository: Path,
     check_uuid: str,
+    log_path: Path | None = None,
+    transcript: RunTranscript | None = None,
 ) -> int:
     try:
         ping_start(check_uuid)
@@ -371,21 +487,49 @@ def run_cron_workflow(
         )
         return 1
 
-    preflight_status = preflight_servers_repository(servers_repository)
-    if preflight_status != 0:
-        return finish_failed_run(check_uuid, preflight_status)
+    preflight_failure = preflight_servers_repository(servers_repository)
+    if preflight_failure is not None:
+        return finish_failed_run(
+            check_uuid,
+            1,
+            preflight_failure,
+            log_path,
+            transcript,
+        )
 
     servercopy_version = get_servercopy_version(servercopy_command)
     if servercopy_version is None:
-        return finish_failed_run(check_uuid, 1)
+        return finish_failed_run(
+            check_uuid,
+            1,
+            "could not determine the servercopy version.",
+            log_path,
+            transcript,
+        )
 
     servercopy_status = run_servercopy(servercopy_command, servers_repository)
     if servercopy_status != 0:
-        return finish_failed_run(check_uuid, servercopy_status)
+        print(
+            f"Error: servercopy failed (exit status {servercopy_status}).",
+            file=sys.stderr,
+        )
+        return finish_failed_run(
+            check_uuid,
+            servercopy_status,
+            f"servercopy failed (exit status {servercopy_status}).",
+            log_path,
+            transcript,
+        )
 
     git_status = commit_synced_changes(servers_repository, servercopy_version)
     if git_status != 0:
-        return finish_failed_run(check_uuid, git_status)
+        return finish_failed_run(
+            check_uuid,
+            git_status,
+            f"Git post-sync workflow failed (exit status {git_status}).",
+            log_path,
+            transcript,
+        )
 
     try:
         ping_success(check_uuid)
@@ -397,6 +541,39 @@ def run_cron_workflow(
         )
         return 1
     return 0
+
+
+def run_logged_workflow(
+    log_path: Path,
+    servercopy_command: Path,
+    servers_repository: Path,
+    check_uuid: str,
+) -> int:
+    """Run one monitored workflow with live terminal and transcript output."""
+
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log = log_path.open("x", encoding="utf-8", buffering=1)
+    except OSError as error:
+        print(f"Error: could not create the workflow log: {error}", file=sys.stderr)
+        return 1
+
+    with log:
+        transcript = RunTranscript(log)
+        with (
+            redirect_stdout(transcript.stdout),
+            redirect_stderr(transcript.stderr),
+        ):
+            print(f"servercopy_cron log: {log_path}")
+            status = run_cron_workflow(
+                servercopy_command,
+                servers_repository,
+                check_uuid,
+                log_path,
+                transcript,
+            )
+            print(f"servercopy_cron exit status: {status}")
+            return status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -451,7 +628,14 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-        return run_cron_workflow(
+        log_path = (
+            mermaid_root
+            / "logs"
+            / "servercopy_cron"
+            / utc_log_filename()
+        )
+        return run_logged_workflow(
+            log_path,
             servercopy_command,
             servers_repository,
             check_uuid,

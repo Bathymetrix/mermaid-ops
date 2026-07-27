@@ -63,6 +63,7 @@ paths without a separate `MERMAID_OPS` setting:
 ```text
 servers repository   $MERMAID/servers
 lock                  $MERMAID/logs/servercopy_cron.lock
+workflow logs         $MERMAID/logs/servercopy_cron/<UTC>.log
 servercopy command    <mermaid-ops repository>/servercopy
 monitoring UUID file  <mermaid-ops repository>/data/healthchecks_uuid.txt
 ```
@@ -113,11 +114,33 @@ If the file is missing, unreadable, empty, or invalid, the wrapper exits
 nonzero after releasing the lock. It does not send a Healthchecks.io ping, run
 `servercopy`, or perform Git operations.
 
+## Per-workflow logging
+
+After acquiring the lock and loading valid monitoring configuration, the
+wrapper creates exactly one UTC-timestamped log:
+
+```text
+$MERMAID/logs/servercopy_cron/2026-07-27T19-56-50Z.log
+```
+
+The wrapper internally duplicates stdout and stderr to the terminal and the
+log, flushing each write promptly. It also copies `servercopy` stdout and stderr
+through live, line-buffered streams, so interactive output remains visible
+during long synchronizations. The transcript includes wrapper, synchronization,
+Git, and Healthchecks diagnostics plus the final workflow exit status. No
+external `tee` command or crontab redirection is used.
+
+Lightweight operations remain outside this logging boundary.
+`servercopy_cron --version` exits before lock acquisition, monitoring
+configuration, or log creation. Failures before a monitored workflow can be
+initialized, such as a missing `MERMAID`, also retain their direct stderr-only
+behavior.
+
 ## Healthchecks.io execution monitoring
 
 The wrapper constructs Ping URLs internally from the fixed base URL
 `https://hc-ping.com`; the configuration file contains only the Check UUID.
-Each lifecycle signal is one empty HTTP POST with a 15-second timeout:
+Each lifecycle signal is one HTTP POST with a 15-second timeout:
 
 ```text
 start     https://hc-ping.com/<check-uuid>/start
@@ -125,9 +148,12 @@ success   https://hc-ping.com/<check-uuid>
 failure   https://hc-ping.com/<check-uuid>/fail
 ```
 
-The wrapper does not upload command output, logs, filenames, exceptions, or
-credentials. It requires an HTTP-success response, does not read or report the
-response body, and does not retry.
+The start and success bodies are empty. A failure request contains a bounded,
+concise summary of the immediate failure, recent useful diagnostic output, and
+the local workflow-log path when available. The complete transcript remains
+local; credentials and the private Check UUID are never included. The wrapper
+requires an HTTP-success response, does not read or report the response body,
+and does not retry.
 
 The `/start` request must succeed before `servercopy` begins. If it fails, the
 wrapper reports a sanitized monitoring error and exits nonzero without
@@ -170,8 +196,10 @@ version, `servercopy` is invoked with:
 --output $MERMAID/servers
 ```
 
-Its stdout and stderr are inherited rather than captured, so the cron log is
-updated while the long-running synchronization is in progress.
+Its stdout and stderr are copied concurrently to the live terminal streams and
+the current workflow transcript. `PYTHONUNBUFFERED=1` is set for the child
+process so output remains prompt while the long-running synchronization is in
+progress.
 
 If `servercopy` returns nonzero, the wrapper:
 
@@ -228,7 +256,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.2.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.3.0]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
@@ -244,25 +272,19 @@ also exits nonzero but does not attempt a rollback or send `/fail`.
 
 ## Crontab and Healthchecks.io Check setup
 
-Create the log directory once before installing the cron entry. Shell
-redirection happens before the wrapper can create the directory for its lock:
-
-```sh
-mkdir -p /Users/jdsimon/mermaid/logs
-```
-
 Use the wrapper, not `servercopy`, in crontab:
 
 ```cron
 PATH=/opt/homebrew/bin:/usr/bin:/bin
 MERMAID=/Users/jdsimon/mermaid
-30 7,15,23 * * * /Users/jdsimon/programs/mermaid-ops/servercopy_cron >> /Users/jdsimon/mermaid/logs/servercopy_cron.log 2>&1
+30 7,15,23 * * * /Users/jdsimon/programs/mermaid-ops/servercopy_cron
 ```
 
 The existing cron command needs no monitoring environment variables because
 the wrapper reads its repository-local ignored UUID file. This schedule runs at
-07:30, 15:30, and 23:30 in the host's local timezone. The redirected log
-receives live `servercopy` output plus wrapper diagnostics.
+07:30, 15:30, and 23:30 in the host's local timezone. The wrapper creates and
+flushes its own per-workflow logs; the crontab must not redirect output into a
+shared transcript.
 
 Configure the Healthchecks.io Check with the actual cron expression:
 
