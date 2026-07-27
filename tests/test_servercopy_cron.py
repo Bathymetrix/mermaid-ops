@@ -10,6 +10,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event
+from typing import TextIO
 import unittest
 from unittest.mock import ANY, Mock, call, patch
 from urllib.error import URLError
@@ -1077,7 +1078,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.3.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.0]",
                 "failure",
             ],
         )
@@ -1220,7 +1221,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.3.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.0]",
                 "success",
             ],
         )
@@ -1281,7 +1282,7 @@ class WorkflowTests(unittest.TestCase):
                 "commit",
                 "-m",
                 "servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.3.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.0]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)
@@ -1289,9 +1290,49 @@ class WorkflowTests(unittest.TestCase):
 
 
 class LoggingTests(unittest.TestCase):
+    def run_logged_cron_workflow(
+        self,
+        mermaid_root: Path,
+    ) -> tuple[int, Path]:
+        filename = "2026-07-27T19-56-50Z.log"
+        log_path = mermaid_root / "logs" / "servercopy_cron" / filename
+
+        def run_locked(
+            configured_root: Path,
+            repository_root: Path,
+            configured_log_path: Path,
+            transcript: object,
+        ) -> int:
+            return servercopy_cron.run_cron_workflow(
+                Path("/repo/servercopy"),
+                configured_root / "servers",
+                CHECK_UUID,
+                configured_log_path,
+                transcript,
+            )
+
+        with (
+            patch.object(
+                servercopy_cron,
+                "utc_log_filename",
+                return_value=filename,
+            ),
+            patch.object(
+                servercopy_cron,
+                "run_locked_workflow",
+                side_effect=run_locked,
+            ),
+        ):
+            status = servercopy_cron.run_logged_invocation(
+                mermaid_root,
+                Path("/repo"),
+                ["/repo/servercopy_cron"],
+            )
+
+        return status, log_path
+
     def test_healthchecks_start_failure_is_logged(self) -> None:
         with TemporaryDirectory() as directory:
-            log_path = Path(directory) / "healthchecks.log"
             with (
                 patch.object(
                     servercopy_cron,
@@ -1301,11 +1342,8 @@ class LoggingTests(unittest.TestCase):
                 redirect_stdout(StringIO()),
                 redirect_stderr(StringIO()),
             ):
-                status = servercopy_cron.run_logged_workflow(
-                    log_path,
-                    Path("/repo/servercopy"),
-                    Path("/mermaid/servers"),
-                    CHECK_UUID,
+                status, log_path = self.run_logged_cron_workflow(
+                    Path(directory)
                 )
 
             transcript = log_path.read_text(encoding="utf-8")
@@ -1316,7 +1354,6 @@ class LoggingTests(unittest.TestCase):
 
     def test_servercopy_failure_is_logged_and_reported(self) -> None:
         with TemporaryDirectory() as directory:
-            log_path = Path(directory) / "servercopy.log"
             with (
                 patch.object(servercopy_cron, "ping_start"),
                 patch.object(
@@ -1340,15 +1377,13 @@ class LoggingTests(unittest.TestCase):
                 patch.object(
                     servercopy_cron,
                     "ping_failure",
+                    side_effect=servercopy_cron.HealthchecksPingError,
                 ) as ping_failure,
                 redirect_stdout(StringIO()),
                 redirect_stderr(StringIO()),
             ):
-                status = servercopy_cron.run_logged_workflow(
-                    log_path,
-                    Path("/repo/servercopy"),
-                    Path("/mermaid/servers"),
-                    CHECK_UUID,
+                status, log_path = self.run_logged_cron_workflow(
+                    Path(directory)
                 )
 
             transcript = log_path.read_text(encoding="utf-8")
@@ -1356,10 +1391,49 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual(status, 17)
         self.assertIn("live synchronization output", transcript)
         self.assertIn("servercopy failed (exit status 17)", transcript)
+        self.assertIn("failure ping also failed", transcript)
         self.assertIn("servercopy_cron exit status: 17", transcript)
         ping_failure.assert_called_once()
         self.assertIn("servercopy failed", ping_failure.call_args.args[1])
         self.assertIn(str(log_path), ping_failure.call_args.args[1])
+
+    def test_healthchecks_success_failure_is_logged(self) -> None:
+        with TemporaryDirectory() as directory:
+            with (
+                patch.object(servercopy_cron, "ping_start"),
+                patch.object(
+                    servercopy_cron,
+                    "preflight_servers_repository",
+                    return_value=None,
+                ),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    return_value=SERVERCOPY_VERSION,
+                ),
+                patch.object(servercopy_cron, "run_servercopy", return_value=0),
+                patch.object(
+                    servercopy_cron,
+                    "commit_synced_changes",
+                    return_value=0,
+                ),
+                patch.object(
+                    servercopy_cron,
+                    "ping_success",
+                    side_effect=servercopy_cron.HealthchecksPingError,
+                ),
+                redirect_stdout(StringIO()),
+                redirect_stderr(StringIO()),
+            ):
+                status, log_path = self.run_logged_cron_workflow(
+                    Path(directory)
+                )
+
+            transcript = log_path.read_text(encoding="utf-8")
+
+        self.assertNotEqual(status, 0)
+        self.assertIn("Healthchecks.io success ping failed", transcript)
+        self.assertIn("servercopy_cron exit status: 1", transcript)
 
     def test_git_failure_is_logged_and_reported(self) -> None:
         def fail_git(repository: Path, version: str) -> int:
@@ -1368,7 +1442,6 @@ class LoggingTests(unittest.TestCase):
             return 1
 
         with TemporaryDirectory() as directory:
-            log_path = Path(directory) / "git.log"
             with (
                 patch.object(servercopy_cron, "ping_start"),
                 patch.object(
@@ -1394,11 +1467,8 @@ class LoggingTests(unittest.TestCase):
                 redirect_stdout(StringIO()),
                 redirect_stderr(StringIO()),
             ):
-                status = servercopy_cron.run_logged_workflow(
-                    log_path,
-                    Path("/repo/servercopy"),
-                    Path("/mermaid/servers"),
-                    CHECK_UUID,
+                status, log_path = self.run_logged_cron_workflow(
+                    Path(directory)
                 )
 
             transcript = log_path.read_text(encoding="utf-8")
@@ -1411,6 +1481,26 @@ class LoggingTests(unittest.TestCase):
         self.assertIn("Git post-sync workflow failed", message)
         self.assertIn("synthetic commit failure", message)
         self.assertIn(str(log_path), message)
+
+    def test_timestamp_collision_creates_distinct_log(self) -> None:
+        with TemporaryDirectory() as directory:
+            log_directory = Path(directory)
+            with patch.object(
+                servercopy_cron,
+                "utc_log_filename",
+                return_value="2026-07-27T19-56-50Z.log",
+            ):
+                first_path, first_log = servercopy_cron.open_run_log(
+                    log_directory
+                )
+                first_log.close()
+                second_path, second_log = servercopy_cron.open_run_log(
+                    log_directory
+                )
+                second_log.close()
+
+        self.assertEqual(first_path.name, "2026-07-27T19-56-50Z.log")
+        self.assertEqual(second_path.name, "2026-07-27T19-56-50Z_1.log")
 
 
 class MainTests(unittest.TestCase):
@@ -1426,7 +1516,7 @@ class MainTests(unittest.TestCase):
                     ) as load_uuid,
                     patch.object(
                         servercopy_cron,
-                        "run_logged_workflow",
+                        "run_logged_invocation",
                     ) as logged_workflow,
                     patch.object(
                         servercopy_cron.fcntl,
@@ -1438,7 +1528,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.3.0\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.4.0\n")
                 load_uuid.assert_not_called()
                 logged_workflow.assert_not_called()
                 flock.assert_not_called()
@@ -1452,7 +1542,10 @@ class MainTests(unittest.TestCase):
                 servercopy_cron,
                 "load_healthchecks_uuid",
             ) as load_uuid,
-            patch.object(servercopy_cron, "run_cron_workflow") as workflow,
+            patch.object(
+                servercopy_cron,
+                "run_logged_invocation",
+            ) as logged_invocation,
             redirect_stderr(error_output),
         ):
             status = servercopy_cron.main([])
@@ -1460,12 +1553,14 @@ class MainTests(unittest.TestCase):
         self.assertNotEqual(status, 0)
         self.assertIn("MERMAID must be set", error_output.getvalue())
         load_uuid.assert_not_called()
-        workflow.assert_not_called()
+        logged_invocation.assert_not_called()
 
     def test_overlapping_execution_sends_no_healthcheck_requests_or_work(
         self,
     ) -> None:
         with TemporaryDirectory() as directory:
+            mermaid_root = Path(directory).resolve()
+            output = StringIO()
             error_output = StringIO()
 
             with (
@@ -1487,12 +1582,21 @@ class MainTests(unittest.TestCase):
                 patch.object(servercopy_cron, "run_servercopy") as run_servercopy,
                 patch.object(servercopy_cron, "run_git") as run_git,
                 patch.object(servercopy_cron, "urlopen") as urlopen,
+                redirect_stdout(output),
                 redirect_stderr(error_output),
             ):
                 status = servercopy_cron.main([])
 
+            logs = list(
+                (mermaid_root / "logs" / "servercopy_cron").glob("*.log")
+            )
+            self.assertEqual(len(logs), 1)
+            transcript = logs[0].read_text(encoding="utf-8")
+
         self.assertNotEqual(status, 0)
         self.assertIn("already running", error_output.getvalue())
+        self.assertIn("already running", transcript)
+        self.assertIn("servercopy_cron exit status: 1", transcript)
         load_uuid.assert_not_called()
         workflow.assert_not_called()
         run_servercopy.assert_not_called()
@@ -1501,6 +1605,8 @@ class MainTests(unittest.TestCase):
 
     def test_absent_uuid_file_fails_before_servercopy_git_or_ping(self) -> None:
         with TemporaryDirectory() as directory:
+            mermaid_root = Path(directory).resolve()
+            output = StringIO()
             error_output = StringIO()
 
             with (
@@ -1518,12 +1624,20 @@ class MainTests(unittest.TestCase):
                 patch.object(servercopy_cron, "run_servercopy") as run_servercopy,
                 patch.object(servercopy_cron, "run_git") as run_git,
                 patch.object(servercopy_cron, "urlopen") as urlopen,
+                redirect_stdout(output),
                 redirect_stderr(error_output),
             ):
                 status = servercopy_cron.main([])
 
+            logs = list(
+                (mermaid_root / "logs" / "servercopy_cron").glob("*.log")
+            )
+            self.assertEqual(len(logs), 1)
+            transcript = logs[0].read_text(encoding="utf-8")
+
         self.assertNotEqual(status, 0)
         self.assertIn("UUID file could not be read", error_output.getvalue())
+        self.assertIn("UUID file could not be read", transcript)
         load_uuid.assert_called_once()
         workflow.assert_not_called()
         run_servercopy.assert_not_called()
@@ -1537,6 +1651,8 @@ class MainTests(unittest.TestCase):
         error_output = StringIO()
 
         with TemporaryDirectory() as directory:
+            mermaid_root = Path(directory).resolve()
+            output = StringIO()
             uuid_path = Path(directory) / "invalid-healthchecks-uuid.txt"
             uuid_path.write_text(f"{private_value}\n", encoding="ascii")
             load_healthchecks_uuid = servercopy_cron.load_healthchecks_uuid
@@ -1559,17 +1675,100 @@ class MainTests(unittest.TestCase):
                 patch.object(servercopy_cron, "run_servercopy") as run_servercopy,
                 patch.object(servercopy_cron, "run_git") as run_git,
                 patch.object(servercopy_cron, "urlopen") as urlopen,
+                redirect_stdout(output),
                 redirect_stderr(error_output),
             ):
                 status = servercopy_cron.main([])
 
+            logs = list(
+                (mermaid_root / "logs" / "servercopy_cron").glob("*.log")
+            )
+            self.assertEqual(len(logs), 1)
+            transcript = logs[0].read_text(encoding="utf-8")
+
         self.assertNotEqual(status, 0)
         self.assertIn("does not contain a valid UUID", error_output.getvalue())
+        self.assertIn("does not contain a valid UUID", transcript)
         self.assertNotIn(private_value, error_output.getvalue())
+        self.assertNotIn(private_value, transcript)
         workflow.assert_not_called()
         run_servercopy.assert_not_called()
         run_git.assert_not_called()
         urlopen.assert_not_called()
+
+    def test_lock_preparation_failure_is_logged(self) -> None:
+        original_open = Path.open
+
+        def fail_lock_open(
+            path: Path,
+            *args: object,
+            **kwargs: object,
+        ) -> TextIO:
+            if path.name == "servercopy_cron.lock":
+                raise OSError("synthetic lock preparation failure")
+            return original_open(path, *args, **kwargs)
+
+        with TemporaryDirectory() as directory:
+            mermaid_root = Path(directory).resolve()
+            output = StringIO()
+            error_output = StringIO()
+            with (
+                patch.dict(
+                    servercopy_cron.os.environ,
+                    {"MERMAID": directory},
+                    clear=True,
+                ),
+                patch.object(Path, "open", new=fail_lock_open),
+                redirect_stdout(output),
+                redirect_stderr(error_output),
+            ):
+                status = servercopy_cron.main([])
+
+            logs = list(
+                (mermaid_root / "logs" / "servercopy_cron").glob("*.log")
+            )
+            self.assertEqual(len(logs), 1)
+            transcript = logs[0].read_text(encoding="utf-8")
+
+        self.assertNotEqual(status, 0)
+        self.assertIn("could not prepare", error_output.getvalue())
+        self.assertIn("synthetic lock preparation failure", transcript)
+        self.assertIn("servercopy_cron exit status: 1", transcript)
+
+    def test_unexpected_logged_exception_records_traceback_and_status(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            mermaid_root = Path(directory).resolve()
+            output = StringIO()
+            error_output = StringIO()
+            with (
+                patch.dict(
+                    servercopy_cron.os.environ,
+                    {"MERMAID": directory},
+                    clear=True,
+                ),
+                patch.object(
+                    servercopy_cron,
+                    "run_locked_workflow",
+                    side_effect=RuntimeError("synthetic unexpected failure"),
+                ),
+                redirect_stdout(output),
+                redirect_stderr(error_output),
+            ):
+                status = servercopy_cron.main([])
+
+            logs = list(
+                (mermaid_root / "logs" / "servercopy_cron").glob("*.log")
+            )
+            self.assertEqual(len(logs), 1)
+            transcript = logs[0].read_text(encoding="utf-8")
+
+        self.assertNotEqual(status, 0)
+        self.assertIn("unexpected servercopy_cron failure", transcript)
+        self.assertIn("RuntimeError: synthetic unexpected failure", transcript)
+        self.assertIn("servercopy_cron exit status: 1", transcript)
+        self.assertIn("unexpected servercopy_cron failure", error_output.getvalue())
 
     def test_successful_workflow_creates_one_complete_timestamped_log(
         self,
@@ -1579,7 +1778,7 @@ class MainTests(unittest.TestCase):
         error_output = StringIO()
 
         with TemporaryDirectory() as directory:
-            mermaid_root = Path(directory)
+            mermaid_root = Path(directory).resolve()
             filename = "2026-07-27T19-56-50Z.log"
 
             def run_workflow(
@@ -1618,6 +1817,26 @@ class MainTests(unittest.TestCase):
                 ),
                 patch.object(
                     servercopy_cron,
+                    "utc_now",
+                    return_value="2026-07-27T19:56:50Z",
+                ),
+                patch.object(
+                    servercopy_cron.getpass,
+                    "getuser",
+                    return_value="operator",
+                ),
+                patch.object(
+                    servercopy_cron.socket,
+                    "getfqdn",
+                    return_value="host.example.org",
+                ),
+                patch.object(
+                    servercopy_cron.platform,
+                    "platform",
+                    return_value="TestOS-1.0",
+                ),
+                patch.object(
+                    servercopy_cron,
                     "run_cron_workflow",
                     side_effect=run_workflow,
                 ) as workflow,
@@ -1649,6 +1868,14 @@ class MainTests(unittest.TestCase):
             self.assertEqual(logs[0].name, filename)
             transcript_text = logs[0].read_text(encoding="utf-8")
             for expected in (
+                "servercopy_cron started: 2026-07-27T19:56:50Z",
+                "servercopy_cron version: 2.4.0",
+                "invocation: operator@host.example.org",
+                "system: TestOS-1.0",
+                f"MERMAID: {mermaid_root}",
+                f"repository: {SCRIPT.parent}",
+                f"command: {SCRIPT}",
+                f"log: {logs[0]}",
                 "wrapper stdout",
                 "wrapper stderr",
                 "servercopy stdout",

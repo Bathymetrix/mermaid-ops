@@ -11,6 +11,9 @@ the lifecycle of the complete workflow to Healthchecks.io:
 cron invokes servercopy_cron
         |
         v
+resolve MERMAID, create run log, and write invocation header
+        |
+        v
 acquire lock and validate monitoring configuration
         |
         v
@@ -114,10 +117,10 @@ If the file is missing, unreadable, empty, or invalid, the wrapper exits
 nonzero after releasing the lock. It does not send a Healthchecks.io ping, run
 `servercopy`, or perform Git operations.
 
-## Per-workflow logging
+## Per-invocation logging
 
-After acquiring the lock and loading valid monitoring configuration, the
-wrapper creates exactly one UTC-timestamped log:
+Immediately after parsing normal-operation arguments and resolving `MERMAID`,
+the wrapper creates exactly one UTC-timestamped log:
 
 ```text
 $MERMAID/logs/servercopy_cron/2026-07-27T19-56-50Z.log
@@ -130,11 +133,27 @@ during long synchronizations. The transcript includes wrapper, synchronization,
 Git, and Healthchecks diagnostics plus the final workflow exit status. No
 external `tee` command or crontab redirection is used.
 
+This boundary precedes lock-file preparation, lock acquisition, and monitoring
+configuration, so failures in those stages receive the same complete
+transcript. Unexpected exceptions inside the logged invocation are recorded
+with a traceback and final nonzero status. Each transcript begins with:
+
+```text
+servercopy_cron started: <UTC timestamp>
+servercopy_cron version: <version>
+invocation: <user>@<fully-qualified-hostname>
+system: <system information>
+MERMAID: <resolved path>
+repository: <resolved mermaid-ops repository path>
+command: <safely rendered argv>
+log: <log path>
+```
+
 Lightweight operations remain outside this logging boundary.
 `servercopy_cron --version` exits before lock acquisition, monitoring
-configuration, or log creation. Failures before a monitored workflow can be
-initialized, such as a missing `MERMAID`, also retain their direct stderr-only
-behavior.
+configuration, or log creation. A missing `MERMAID` also retains direct
+stderr-only behavior: because the configured log directory is beneath
+`MERMAID`, the wrapper cannot determine it without inventing an implicit root.
 
 ## Healthchecks.io execution monitoring
 
@@ -256,7 +275,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.3.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.0]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
@@ -283,7 +302,7 @@ MERMAID=/Users/jdsimon/mermaid
 The existing cron command needs no monitoring environment variables because
 the wrapper reads its repository-local ignored UUID file. This schedule runs at
 07:30, 15:30, and 23:30 in the host's local timezone. The wrapper creates and
-flushes its own per-workflow logs; the crontab must not redirect output into a
+flushes its own per-invocation logs; the crontab must not redirect output into a
 shared transcript.
 
 Configure the Healthchecks.io Check with the actual cron expression:
@@ -303,10 +322,13 @@ schedule, Grace Time, or Integrations.
 
 - `--version` or `-v`: zero without requiring `MERMAID`, the lock, or monitoring
   configuration.
-- Missing `MERMAID`, lock setup failure, lock acquisition failure, or overlap
-  refusal: nonzero, with no monitoring ping, synchronization, or Git action.
+- Missing `MERMAID`: nonzero with direct stderr output and no log because the
+  configured log location cannot be resolved.
+- Lock setup failure, lock acquisition failure, or overlap refusal: nonzero and
+  logged, with no monitoring ping, synchronization, or Git action.
 - Missing, unreadable, empty, or invalid UUID file: nonzero, with no monitoring
-  ping, synchronization, or Git action.
+  ping, synchronization, or Git action; the failure is recorded in the
+  invocation log.
 - Start-ping failure: nonzero, with no synchronization or Git action.
 - `servercopy --version` execution failure or malformed output: nonzero after
   one failure-ping attempt, with no synchronization or Git action.

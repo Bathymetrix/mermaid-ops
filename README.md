@@ -334,7 +334,7 @@ sending a Healthchecks.io ping, running synchronization, or using Git.
 
 Cron must invoke `servercopy_cron`, not `servercopy` directly. The wrapper
 requires `MERMAID`, derives the destination as `$MERMAID/servers`, and creates
-one UTC-timestamped transcript for every monitored workflow under:
+one UTC-timestamped transcript for every normal invocation under:
 
 ```text
 $MERMAID/logs/servercopy_cron/2026-07-27T19-56-50Z.log
@@ -342,7 +342,15 @@ $MERMAID/logs/servercopy_cron/2026-07-27T19-56-50Z.log
 
 The wrapper internally duplicates its stdout and stderr, including live
 `servercopy` output, to both the terminal and this promptly flushed log. Cron
-does not perform logging or shell redirection.
+does not perform logging or shell redirection. Logging begins immediately after
+`MERMAID` is resolved, before lock preparation or monitoring configuration, so
+those startup failures are recorded too. Each log begins with the UTC start
+time, wrapper version, invoking user and fully qualified hostname, system
+information, resolved paths, safely rendered command, and log path.
+
+`servercopy_cron --version` remains a lightweight, log-free operation. If
+`MERMAID` is absent, the wrapper reports the error directly to stderr because
+the configured log location cannot be determined without inventing a root.
 
 The scheduled command is:
 
@@ -431,7 +439,7 @@ changes exist. The message records the UTC timestamp and both independently
 versioned executables:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.3.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.0]
 ```
 
 `servercopy_cron` obtains the `servercopy` version through the latter's public
@@ -511,8 +519,8 @@ The test suite checks numbered-suffix discovery, parsing and contiguity,
 the hardcoded fixed suffix tuple, recovered lftp command shape, generic SFTP and
 FTPS behavior, dry-run generation, output suppression and redaction,
 heartbeats, silence termination, private UUID parsing, Healthchecks.io lifecycle
-ordering and failure policy, wrapper locking, clean-repository preflight, and
-conservative Git policy:
+ordering and failure policy, early per-invocation logging and provenance,
+wrapper locking, clean-repository preflight, and conservative Git policy:
 
 ```sh
 python3.12 -m unittest discover -s tests -v

@@ -7,13 +7,18 @@ import argparse
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 import fcntl
+import getpass
 from http.client import HTTPException
 import os
 from pathlib import Path
+import platform
+import shlex
+import socket
 import subprocess
 import sys
 from threading import Lock, Thread
 from typing import TextIO
+import traceback
 from urllib.request import Request, urlopen
 from uuid import UUID
 
@@ -26,7 +31,7 @@ if sys.version_info < MIN_VERSION:
     )
 
 
-SERVERCOPY_CRON_VERSION = "2.3.0"
+SERVERCOPY_CRON_VERSION = "2.4.0"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
 FAILURE_EXCERPT_CHARACTERS = 2_000
@@ -543,48 +548,14 @@ def run_cron_workflow(
     return 0
 
 
-def run_logged_workflow(
+def run_locked_workflow(
+    mermaid_root: Path,
+    repository_root: Path,
     log_path: Path,
-    servercopy_command: Path,
-    servers_repository: Path,
-    check_uuid: str,
+    transcript: RunTranscript,
 ) -> int:
-    """Run one monitored workflow with live terminal and transcript output."""
+    """Acquire the invocation lock, load configuration, and run the workflow."""
 
-    try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log = log_path.open("x", encoding="utf-8", buffering=1)
-    except OSError as error:
-        print(f"Error: could not create the workflow log: {error}", file=sys.stderr)
-        return 1
-
-    with log:
-        transcript = RunTranscript(log)
-        with (
-            redirect_stdout(transcript.stdout),
-            redirect_stderr(transcript.stderr),
-        ):
-            print(f"servercopy_cron log: {log_path}")
-            status = run_cron_workflow(
-                servercopy_command,
-                servers_repository,
-                check_uuid,
-                log_path,
-                transcript,
-            )
-            print(f"servercopy_cron exit status: {status}")
-            return status
-
-
-def main(argv: list[str] | None = None) -> int:
-    parse_args(argv)
-    mermaid = os.environ.get("MERMAID")
-    if not mermaid:
-        print("Error: MERMAID must be set before running this script.", file=sys.stderr)
-        return 1
-
-    mermaid_root = Path(mermaid)
-    repository_root = Path(__file__).resolve().parent
     servers_repository = mermaid_root / "servers"
     healthchecks_uuid_path = repository_root / "data" / "healthchecks_uuid.txt"
     servercopy_command = repository_root / "servercopy"
@@ -628,18 +599,142 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-        log_path = (
-            mermaid_root
-            / "logs"
-            / "servercopy_cron"
-            / utc_log_filename()
-        )
-        return run_logged_workflow(
-            log_path,
+        return run_cron_workflow(
             servercopy_command,
             servers_repository,
             check_uuid,
+            log_path,
+            transcript,
         )
+
+
+def open_run_log(log_directory: Path) -> tuple[Path, TextIO]:
+    """Create one exclusive timestamped log, suffixing rare collisions."""
+
+    log_directory.mkdir(parents=True, exist_ok=True)
+    initial_path = log_directory / utc_log_filename()
+    candidate = initial_path
+    collision = 0
+    while True:
+        try:
+            return candidate, candidate.open(
+                "x",
+                encoding="utf-8",
+                buffering=1,
+            )
+        except FileExistsError:
+            collision += 1
+            candidate = initial_path.with_stem(
+                f"{initial_path.stem}_{collision}"
+            )
+
+
+def invocation_argv(argv: list[str] | None) -> list[str]:
+    """Return the actual or explicitly supplied command argument vector."""
+
+    if argv is None:
+        return sys.argv.copy()
+    return [str(Path(__file__).resolve()), *argv]
+
+
+def write_invocation_header(
+    mermaid_root: Path,
+    repository_root: Path,
+    command: list[str],
+    log_path: Path,
+) -> None:
+    """Write reproducible invocation provenance without reading credentials."""
+
+    try:
+        user = getpass.getuser()
+    except (KeyError, OSError):
+        user = "unknown"
+    try:
+        hostname = socket.getfqdn()
+    except OSError:
+        hostname = "unknown"
+
+    print(f"servercopy_cron started: {utc_now()}")
+    print(f"servercopy_cron version: {SERVERCOPY_CRON_VERSION}")
+    print(f"invocation: {user}@{hostname}")
+    print(f"system: {platform.platform()}")
+    print(f"MERMAID: {mermaid_root}")
+    print(f"repository: {repository_root}")
+    print(f"command: {shlex.join(command)}")
+    print(f"log: {log_path}")
+
+
+def run_logged_invocation(
+    mermaid_root: Path,
+    repository_root: Path,
+    command: list[str],
+) -> int:
+    """Log one complete normal invocation from startup through final status."""
+
+    try:
+        log_path, log = open_run_log(
+            mermaid_root / "logs" / "servercopy_cron"
+        )
+    except OSError as error:
+        print(
+            f"Error: could not create the invocation log: {error}",
+            file=sys.stderr,
+        )
+        return 1
+
+    with log:
+        transcript = RunTranscript(log)
+        with (
+            redirect_stdout(transcript.stdout),
+            redirect_stderr(transcript.stderr),
+        ):
+            status = 1
+            try:
+                write_invocation_header(
+                    mermaid_root,
+                    repository_root,
+                    command,
+                    log_path,
+                )
+                status = run_locked_workflow(
+                    mermaid_root,
+                    repository_root,
+                    log_path,
+                    transcript,
+                )
+            except KeyboardInterrupt:
+                status = 130
+                print("Error: servercopy_cron was interrupted.", file=sys.stderr)
+            except Exception:
+                print(
+                    "Error: unexpected servercopy_cron failure:",
+                    file=sys.stderr,
+                )
+                traceback.print_exc()
+            finally:
+                print(f"servercopy_cron exit status: {status}")
+            return status
+
+
+def main(argv: list[str] | None = None) -> int:
+    parse_args(argv)
+    mermaid = os.environ.get("MERMAID")
+    if not mermaid:
+        # The configured run-log location is beneath MERMAID, so this startup
+        # failure cannot be given a per-run log without inventing a root.
+        print(
+            "Error: MERMAID must be set before running this script.",
+            file=sys.stderr,
+        )
+        return 1
+
+    mermaid_root = Path(mermaid).expanduser().resolve()
+    repository_root = Path(__file__).resolve().parent
+    return run_logged_invocation(
+        mermaid_root,
+        repository_root,
+        invocation_argv(argv),
+    )
 
 
 if __name__ == "__main__":
