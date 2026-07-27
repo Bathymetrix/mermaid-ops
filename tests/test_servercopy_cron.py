@@ -23,7 +23,7 @@ sys.modules[LOADER.name] = servercopy_cron
 LOADER.exec_module(servercopy_cron)
 
 CHECK_UUID = "11111111-2222-3333-4444-555555555555"
-SERVERCOPY_VERSION = "1.7.0"
+SERVERCOPY_VERSION = "1.8.2"
 
 
 def git_result(
@@ -643,7 +643,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.7.0 servercopy_cron=2.1.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.1.1]",
                 "failure",
             ],
         )
@@ -786,7 +786,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.7.0 servercopy_cron=2.1.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.1.1]",
                 "success",
             ],
         )
@@ -847,7 +847,7 @@ class WorkflowTests(unittest.TestCase):
                 "commit",
                 "-m",
                 "servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.7.0 servercopy_cron=2.1.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.1.1]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)
@@ -871,7 +871,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.1.0\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.1.1\n")
                 load_uuid.assert_not_called()
 
     def test_missing_mermaid_fails_before_any_work(self) -> None:

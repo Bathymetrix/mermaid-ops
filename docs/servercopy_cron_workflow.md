@@ -3,7 +3,7 @@
 ## Overview
 
 `servercopy` remains responsible only for synchronization. The cron job invokes
-the directly executable Python 3.14 wrapper `servercopy_cron`, which adds the
+the directly executable Python 3.12 wrapper `servercopy_cron`, which adds the
 small amount of operational policy needed around a scheduled run and reports
 the lifecycle of the complete workflow to Healthchecks.io:
 
@@ -209,7 +209,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.7.0 servercopy_cron=2.1.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.1.1]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the

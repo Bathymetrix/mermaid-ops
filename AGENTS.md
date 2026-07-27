@@ -36,7 +36,7 @@ provider/plugin architectures, or installable packages unless those become
 necessary.
 
 The canonical `servercopy` implementation is one directly executable,
-standard-library-only Python script targeting Python 3.14.
+standard-library-only Python script targeting Python 3.12.
 
 ## Credentials
 

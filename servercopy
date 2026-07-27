@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.14
+#!/usr/bin/env python3
 """Mirror configured MERMAID server sources with lftp."""
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import traceback
 from typing import NamedTuple, TextIO
 
 
-SERVERCOPY_VERSION = "1.8.1"
+SERVERCOPY_VERSION = "1.8.2"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 COMMON_OPTIONS = (

@@ -419,7 +419,7 @@ runs `git add -A`, and creates a commit only when changes exist. The message
 records the UTC timestamp and both independently versioned executables:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.7.0 servercopy_cron=2.1.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.1.1]
 ```
 
 `servercopy_cron` obtains the `servercopy` version through the latter's public
@@ -437,7 +437,7 @@ for the complete policy and exit behavior.
 
 ## Requirements
 
-- Python 3.14
+- Python 3.12 or newer
 - `lftp`
 - Git
 - Outbound HTTPS and DNS access to `hc-ping.com` for execution monitoring
@@ -448,6 +448,51 @@ for the complete policy and exit behavior.
 - A Git working tree rooted at `$MERMAID/servers` for scheduled runs
 - A private, untracked `data/healthchecks_uuid.txt` containing one Check UUID
 
+### New macOS host setup
+
+For a Homebrew installation, install Homebrew in its supported default prefix
+using the
+[official Homebrew installation instructions](https://docs.brew.sh/Installation),
+then install the command-line dependencies:
+
+```sh
+brew install python@3.12 lftp git
+```
+
+Alternatively, use Conda for Python and install `lftp` and Git separately if
+they are not already available:
+
+```sh
+conda create --name mermaid-ops python=3.12
+conda run --name mermaid-ops python -c 'import sys; print(sys.prefix)'
+```
+
+The second command prints the environment directory. Both executables use the
+`#!/usr/bin/env python3` shebang, so prepend that directory's `bin`
+subdirectory to the cron `PATH`; cron does not activate Conda environments. For
+example, a Miniconda installation at `/Users/jdsimon/miniconda3` uses:
+
+```cron
+PATH=/Users/jdsimon/miniconda3/envs/mermaid-ops/bin:/opt/homebrew/bin:/usr/bin:/bin
+```
+
+`env` searches this `PATH` for `python3`, which must be Python 3.12 or newer.
+
+On an Apple Silicon Mac, Homebrew's default prefix is `/opt/homebrew`, so the
+documented cron `PATH` finds the Homebrew-installed interpreter at
+`/opt/homebrew/bin/python3`. Verify the same lookup cron will use before
+installing the crontab:
+
+```sh
+PATH=/opt/homebrew/bin:/usr/bin:/bin /usr/bin/env python3 --version
+PATH=/opt/homebrew/bin:/usr/bin:/bin /usr/bin/env lftp --version
+PATH=/opt/homebrew/bin:/usr/bin:/bin /usr/bin/env git --version
+```
+
+On an Intel Mac, Homebrew's default prefix is `/usr/local`; replace
+`/opt/homebrew/bin` with `/usr/local/bin` in both the verification commands and
+the crontab `PATH`.
+
 ## Tests
 
 The test suite checks numbered-suffix discovery, parsing and contiguity,
@@ -457,7 +502,7 @@ heartbeats, silence termination, private UUID parsing, Healthchecks.io lifecycle
 ordering and failure policy, wrapper locking, and conservative Git policy:
 
 ```sh
-python3.14 -m unittest discover -s tests -v
+python3.12 -m unittest discover -s tests -v
 ```
 
 The tests use synthetic data and mocked lftp, Healthchecks.io HTTP requests,
