@@ -14,6 +14,14 @@ import sys
 from urllib.request import Request, urlopen
 from uuid import UUID
 
+MIN_VERSION = (3, 12)
+if sys.version_info < MIN_VERSION:
+    raise SystemExit(
+        f"servercopy_cron requires Python "
+        f"{MIN_VERSION[0]}.{MIN_VERSION[1]} or newer "
+        f"(found {sys.version_info.major}.{sys.version_info.minor})."
+    )
+
 
 SERVERCOPY_CRON_VERSION = "2.1.1"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"

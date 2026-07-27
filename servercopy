@@ -19,6 +19,13 @@ import time
 import traceback
 from typing import NamedTuple, TextIO
 
+MIN_VERSION = (3, 12)
+if sys.version_info < MIN_VERSION:
+    raise SystemExit(
+        f"servercopy requires Python "
+        f"{MIN_VERSION[0]}.{MIN_VERSION[1]} or newer "
+        f"(found {sys.version_info.major}.{sys.version_info.minor})."
+    )
 
 SERVERCOPY_VERSION = "1.8.2"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
