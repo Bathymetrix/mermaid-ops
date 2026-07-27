@@ -23,7 +23,7 @@ if sys.version_info < MIN_VERSION:
     )
 
 
-SERVERCOPY_CRON_VERSION = "2.1.2"
+SERVERCOPY_CRON_VERSION = "2.2.0"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
 
@@ -200,8 +200,9 @@ def run_git(
     repository: Path, *arguments: str
 ) -> subprocess.CompletedProcess[str]:
     # NOTE: Use cwd= rather than git -C. Frisius and potentially other legacy
-    # HPC systems ship Git 1.8.x, which predates git -C. Do not modernize this
-    # without verifying that every supported deployment target has newer Git.
+    # HPC systems ship Git 1.8.x, which predates git -C. Keep related checks to
+    # legacy-compatible commands such as status --porcelain; do not modernize
+    # either choice without verifying every supported deployment target.
     return subprocess.run(
         ["git", *arguments],
         cwd=repository,
@@ -218,6 +219,60 @@ def report_git_failure(
     print(message, file=sys.stderr)
     if error := result.stderr.strip():
         print(f"Git reported: {error}", file=sys.stderr)
+
+
+def preflight_servers_repository(servers_repository: Path) -> int:
+    """Require an exact, completely clean Git working-tree root."""
+
+    try:
+        worktree = run_git(
+            servers_repository,
+            "rev-parse",
+            "--show-toplevel",
+        )
+        if worktree.returncode != 0 or not worktree.stdout.strip():
+            report_git_failure(
+                "Error: servercopy_cron requires the servers directory to be "
+                "the root of a completely clean Git working tree before "
+                "synchronization.",
+                worktree,
+            )
+            return 1
+        if Path(worktree.stdout.strip()).resolve() != servers_repository.resolve():
+            print(
+                "Error: servercopy_cron requires the servers directory to be "
+                "the root of its Git working tree before synchronization.",
+                file=sys.stderr,
+            )
+            return 1
+
+        status = run_git(servers_repository, "status", "--porcelain")
+        if status.returncode != 0:
+            report_git_failure(
+                "Error: could not inspect the servers Git working tree "
+                f"(git exit status {status.returncode}).",
+                status,
+            )
+            return 1
+    except OSError as error:
+        print(f"Error: could not run the Git preflight: {error}", file=sys.stderr)
+        return 1
+
+    if status.stdout:
+        print(
+            "Error: servercopy_cron requires a completely clean servers Git "
+            "repository before synchronization.",
+            file=sys.stderr,
+        )
+        print("Git status:", file=sys.stderr)
+        print(status.stdout.rstrip("\n"), file=sys.stderr)
+        print(
+            "Commit, stash, or remove these changes before retrying.",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
 
 
 def commit_synced_changes(
@@ -315,6 +370,10 @@ def run_cron_workflow(
             file=sys.stderr,
         )
         return 1
+
+    preflight_status = preflight_servers_repository(servers_repository)
+    if preflight_status != 0:
+        return finish_failed_run(check_uuid, preflight_status)
 
     servercopy_version = get_servercopy_version(servercopy_command)
     if servercopy_version is None:

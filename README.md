@@ -389,14 +389,18 @@ failure   https://hc-ping.com/<check-uuid>/fail
 After obtaining its non-overlap lock and loading the UUID, the wrapper requires
 the start ping to succeed before it runs `servercopy`. A failed start ping exits
 nonzero without synchronization or Git activity. After `/start`, the wrapper
-obtains the synchronization engine's version through `servercopy --version`; a
-failed or malformed version query sends the failure ping and aborts before
-synchronization or Git activity. A `servercopy` or Git failure sends the
-failure ping and retains the underlying nonzero status; a secondary
+requires `$MERMAID/servers` to be the exact root of a completely clean Git
+working tree. Staged, unstaged, deleted, or untracked paths produce a diagnostic
+with `git status --porcelain`, send the failure ping, and abort before
+`servercopy`; ignored files do not count as changes. The wrapper then obtains
+the synchronization engine's version through `servercopy --version`. A failed
+or malformed version query sends the failure ping and aborts before
+synchronization or further Git activity. A `servercopy` or Git failure sends
+the failure ping and retains the underlying nonzero status; a secondary
 failure-ping error is reported without replacing that status. A successful
-no-change run and a successful committed run both send the success ping. If
-the final success ping fails, the wrapper exits nonzero but does not undo
-completed Git work. Pings are not retried.
+no-change run and a successful committed run both send the success ping. If the
+final success ping fails, the wrapper exits nonzero but does not undo completed
+Git work. Pings are not retried.
 
 Create a Healthchecks.io Check with the same cron expression used by the host:
 
@@ -413,13 +417,14 @@ repository does not configure Telegram and contains no Telegram bot token or
 chat ID.
 
 If synchronization fails, partial downloads remain uncommitted and no Git
-command is run. The next cron invocation proceeds at its normal scheduled time.
-After `servercopy` exits successfully, the wrapper refuses a pre-staged index,
-runs `git add -A`, and creates a commit only when changes exist. The message
-records the UTC timestamp and both independently versioned executables:
+staging or commit command is run. The next cron invocation proceeds at its
+normal scheduled time. After `servercopy` exits successfully, the wrapper
+refuses a pre-staged index, runs `git add -A`, and creates a commit only when
+changes exist. The message records the UTC timestamp and both independently
+versioned executables:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.1.2]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.2.0]
 ```
 
 `servercopy_cron` obtains the `servercopy` version through the latter's public
@@ -499,7 +504,8 @@ The test suite checks numbered-suffix discovery, parsing and contiguity,
 the hardcoded fixed suffix tuple, recovered lftp command shape, generic SFTP and
 FTPS behavior, dry-run generation, output suppression and redaction,
 heartbeats, silence termination, private UUID parsing, Healthchecks.io lifecycle
-ordering and failure policy, wrapper locking, and conservative Git policy:
+ordering and failure policy, wrapper locking, clean-repository preflight, and
+conservative Git policy:
 
 ```sh
 python3.12 -m unittest discover -s tests -v

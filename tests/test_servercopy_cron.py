@@ -316,7 +316,293 @@ class SubprocessTests(unittest.TestCase):
         )
 
 
+class GitPreflightTests(unittest.TestCase):
+    def test_clean_porcelain_status_proceeds_without_requesting_ignored_files(
+        self,
+    ) -> None:
+        servers = Path("/mermaid/servers")
+
+        with patch.object(
+            servercopy_cron,
+            "run_git",
+            side_effect=[
+                git_result(0, f"{servers}\n"),
+                git_result(0),
+            ],
+        ) as run_git:
+            status = servercopy_cron.preflight_servers_repository(servers)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            run_git.call_args_list,
+            [
+                call(servers, "rev-parse", "--show-toplevel"),
+                call(servers, "status", "--porcelain"),
+            ],
+        )
+
+    def test_dirty_porcelain_status_reports_paths_and_remediation(self) -> None:
+        dirty_states = {
+            "staged": "M  staged.txt\n",
+            "unstaged": " M modified.txt\n",
+            "tracked deletion": " D deleted.txt\n",
+            "untracked": "?? untracked.txt\n",
+        }
+        servers = Path("/mermaid/servers")
+
+        for state, porcelain in dirty_states.items():
+            with self.subTest(state=state):
+                error_output = StringIO()
+                with (
+                    patch.object(
+                        servercopy_cron,
+                        "run_git",
+                        side_effect=[
+                            git_result(0, f"{servers}\n"),
+                            git_result(0, porcelain),
+                        ],
+                    ),
+                    redirect_stderr(error_output),
+                ):
+                    status = servercopy_cron.preflight_servers_repository(
+                        servers
+                    )
+
+                self.assertNotEqual(status, 0)
+                error = error_output.getvalue()
+                self.assertIn("requires a completely clean", error)
+                self.assertIn(porcelain.strip(), error)
+                self.assertIn("Commit, stash, or remove", error)
+
+    def test_non_git_directory_reports_git_stderr(self) -> None:
+        error_output = StringIO()
+
+        with (
+            patch.object(
+                servercopy_cron,
+                "run_git",
+                return_value=git_result(
+                    128,
+                    stderr="fatal: not a git repository",
+                ),
+            ),
+            redirect_stderr(error_output),
+        ):
+            status = servercopy_cron.preflight_servers_repository(
+                Path("/mermaid/servers")
+            )
+
+        self.assertNotEqual(status, 0)
+        error = error_output.getvalue()
+        self.assertIn("root of a completely clean Git working tree", error)
+        self.assertIn("fatal: not a git repository", error)
+
+    def test_servers_directory_must_be_exact_git_root(self) -> None:
+        parent = Path("/mermaid")
+        error_output = StringIO()
+
+        with (
+            patch.object(
+                servercopy_cron,
+                "run_git",
+                return_value=git_result(0, f"{parent}\n"),
+            ),
+            redirect_stderr(error_output),
+        ):
+            status = servercopy_cron.preflight_servers_repository(
+                parent / "servers"
+            )
+
+        self.assertNotEqual(status, 0)
+        self.assertIn(
+            "root of its Git working tree",
+            error_output.getvalue(),
+        )
+
+    def test_status_failure_reports_git_stderr(self) -> None:
+        servers = Path("/mermaid/servers")
+        error_output = StringIO()
+
+        with (
+            patch.object(
+                servercopy_cron,
+                "run_git",
+                side_effect=[
+                    git_result(0, f"{servers}\n"),
+                    git_result(128, stderr="fatal: status failed"),
+                ],
+            ),
+            redirect_stderr(error_output),
+        ):
+            status = servercopy_cron.preflight_servers_repository(servers)
+
+        self.assertNotEqual(status, 0)
+        error = error_output.getvalue()
+        self.assertIn("could not inspect", error)
+        self.assertIn("fatal: status failed", error)
+
+
+class PreflightWorkflowTests(unittest.TestCase):
+    def test_clean_repository_completes_normal_no_change_workflow(self) -> None:
+        servers = Path("/mermaid/servers")
+        responses = [
+            git_result(0, f"{servers}\n"),
+            git_result(0),
+            git_result(0, f"{servers}\n"),
+            git_result(0),
+            git_result(0),
+            git_result(0),
+        ]
+
+        with (
+            patch.object(servercopy_cron, "ping_start") as ping_start,
+            patch.object(
+                servercopy_cron,
+                "get_servercopy_version",
+                return_value=SERVERCOPY_VERSION,
+            ) as get_version,
+            patch.object(
+                servercopy_cron,
+                "run_servercopy",
+                return_value=0,
+            ) as run_servercopy,
+            patch.object(
+                servercopy_cron,
+                "run_git",
+                side_effect=responses,
+            ),
+            patch.object(servercopy_cron, "ping_failure") as ping_failure,
+            patch.object(servercopy_cron, "ping_success") as ping_success,
+            redirect_stdout(StringIO()),
+        ):
+            status = servercopy_cron.run_cron_workflow(
+                Path("/repo/servercopy"),
+                servers,
+                CHECK_UUID,
+            )
+
+        self.assertEqual(status, 0)
+        ping_start.assert_called_once_with(CHECK_UUID)
+        get_version.assert_called_once_with(Path("/repo/servercopy"))
+        run_servercopy.assert_called_once()
+        ping_failure.assert_not_called()
+        ping_success.assert_called_once_with(CHECK_UUID)
+
+    def test_every_preflight_failure_sends_failure_and_performs_no_work(
+        self,
+    ) -> None:
+        servers = Path("/mermaid/servers")
+        parent = servers.parent
+        failures = {
+            "staged": [
+                git_result(0, f"{servers}\n"),
+                git_result(0, "M  staged.txt\n"),
+            ],
+            "unstaged": [
+                git_result(0, f"{servers}\n"),
+                git_result(0, " M modified.txt\n"),
+            ],
+            "tracked deletion": [
+                git_result(0, f"{servers}\n"),
+                git_result(0, " D deleted.txt\n"),
+            ],
+            "untracked": [
+                git_result(0, f"{servers}\n"),
+                git_result(0, "?? untracked.txt\n"),
+            ],
+            "non-Git directory": [
+                git_result(128, stderr="fatal: not a git repository"),
+            ],
+            "Git root above servers": [
+                git_result(0, f"{parent}\n"),
+            ],
+            "Git status failure": [
+                git_result(0, f"{servers}\n"),
+                git_result(128, stderr="fatal: status failed"),
+            ],
+        }
+
+        for failure, responses in failures.items():
+            with self.subTest(failure=failure):
+                events: list[str] = []
+                response_iterator = iter(responses)
+
+                def record_git(repository: Path, *arguments: str) -> object:
+                    events.append(f"git {arguments[0]}")
+                    return next(response_iterator)
+
+                with (
+                    patch.object(
+                        servercopy_cron,
+                        "ping_start",
+                        side_effect=lambda uuid: events.append("start"),
+                    ) as ping_start,
+                    patch.object(
+                        servercopy_cron,
+                        "get_servercopy_version",
+                    ) as get_version,
+                    patch.object(
+                        servercopy_cron,
+                        "run_servercopy",
+                    ) as run_servercopy,
+                    patch.object(
+                        servercopy_cron,
+                        "run_git",
+                        side_effect=record_git,
+                    ) as run_git,
+                    patch.object(
+                        servercopy_cron,
+                        "commit_synced_changes",
+                    ) as commit_changes,
+                    patch.object(
+                        servercopy_cron,
+                        "ping_failure",
+                        side_effect=lambda uuid: events.append("failure"),
+                    ) as ping_failure,
+                    patch.object(
+                        servercopy_cron,
+                        "ping_success",
+                    ) as ping_success,
+                    redirect_stderr(StringIO()),
+                ):
+                    status = servercopy_cron.run_cron_workflow(
+                        Path("/repo/servercopy"),
+                        servers,
+                        CHECK_UUID,
+                    )
+
+                self.assertNotEqual(status, 0)
+                self.assertEqual(events[0], "start")
+                self.assertTrue(events[1].startswith("git "))
+                self.assertEqual(events[-1], "failure")
+                ping_start.assert_called_once_with(CHECK_UUID)
+                ping_failure.assert_called_once_with(CHECK_UUID)
+                ping_success.assert_not_called()
+                get_version.assert_not_called()
+                run_servercopy.assert_not_called()
+                commit_changes.assert_not_called()
+                self.assertNotIn(
+                    call(servers, "add", "-A"),
+                    run_git.call_args_list,
+                )
+                self.assertFalse(
+                    any(
+                        git_call.args[1:2] == ("commit",)
+                        for git_call in run_git.call_args_list
+                    )
+                )
+
+
 class WorkflowTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.preflight_patcher = patch.object(
+            servercopy_cron,
+            "preflight_servers_repository",
+            return_value=0,
+        )
+        self.preflight = self.preflight_patcher.start()
+        self.addCleanup(self.preflight_patcher.stop)
+
     def test_git_worktree_failure_reports_git_stderr(self) -> None:
         servers = Path("/mermaid/servers")
         error_output = StringIO()
@@ -697,7 +983,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.1.2]",
+                "[servercopy=1.8.2 servercopy_cron=2.2.0]",
                 "failure",
             ],
         )
@@ -840,7 +1126,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.1.2]",
+                "[servercopy=1.8.2 servercopy_cron=2.2.0]",
                 "success",
             ],
         )
@@ -901,7 +1187,7 @@ class WorkflowTests(unittest.TestCase):
                 "commit",
                 "-m",
                 "servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.1.2]",
+                "[servercopy=1.8.2 servercopy_cron=2.2.0]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)
@@ -925,7 +1211,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.1.2\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.2.0\n")
                 load_uuid.assert_not_called()
 
     def test_missing_mermaid_fails_before_any_work(self) -> None:

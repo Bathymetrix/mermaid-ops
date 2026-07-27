@@ -17,6 +17,16 @@ acquire lock and validate monitoring configuration
 send Healthchecks.io /start
         |
         v
+verify the servers Git repository is completely clean
+        |
+        v
+is the repository clean?
+    no  --> print Git status and send /fail
+            perform no synchronization, staging, or commit
+            exit nonzero
+    yes --> continue
+        |
+        v
 query servercopy --version
         |
         v
@@ -188,11 +198,22 @@ The outer lock coordinates `servercopy_cron` invocations. Do not launch
 command's internal lock covers synchronization, but it does not cover the
 wrapper's later Git and terminal-ping window.
 
-## Git behavior after synchronization
+## Git preflight and post-synchronization behavior
 
-Git is considered only after `servercopy` returns zero. The wrapper first
-verifies that `$MERMAID/servers` is the exact root of a Git working tree. It then
-checks the entire index before staging anything.
+After sending `/start` but before querying the `servercopy` version or starting
+synchronization, the wrapper requires `$MERMAID/servers` to be the exact root of
+a completely clean Git working tree. It runs the legacy-compatible
+`git status --porcelain`, which reports staged changes, unstaged tracked
+changes, tracked deletions, and untracked files while omitting ignored files.
+If any changes are present, the wrapper prints the status output and directs
+the operator to commit, stash, or remove the changes. It then sends `/fail` and
+exits nonzero without running `servercopy`, staging files, or creating a commit.
+Failure to inspect the repository follows the same monitored failure path and
+includes captured Git stderr when available.
+
+After `servercopy` returns zero, the wrapper again verifies that
+`$MERMAID/servers` is the exact root of a Git working tree. It then checks the
+entire index before staging anything.
 
 If the index already contains staged changes, the wrapper refuses to run
 `git add` or `git commit`, sends the failure ping, and exits nonzero. This
@@ -207,7 +228,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.1.2]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.2.0]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
