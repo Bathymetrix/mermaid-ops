@@ -539,6 +539,7 @@ class GitPreflightTests(unittest.TestCase):
 class PreflightWorkflowTests(unittest.TestCase):
     def test_clean_repository_completes_normal_no_change_workflow(self) -> None:
         servers = Path("/mermaid/servers")
+        output = StringIO()
         responses = [
             git_result(0, f"{servers}\n"),
             git_result(0),
@@ -567,7 +568,7 @@ class PreflightWorkflowTests(unittest.TestCase):
             ),
             patch.object(servercopy_cron, "ping_failure") as ping_failure,
             patch.object(servercopy_cron, "ping_success") as ping_success,
-            redirect_stdout(StringIO()),
+            redirect_stdout(output),
         ):
             status = servercopy_cron.run_cron_workflow(
                 Path("/repo/servercopy"),
@@ -576,6 +577,10 @@ class PreflightWorkflowTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 0)
+        self.assertIn(
+            f"servercopy version: {SERVERCOPY_VERSION}",
+            output.getvalue(),
+        )
         ping_start.assert_called_once_with(CHECK_UUID)
         get_version.assert_called_once_with(Path("/repo/servercopy"))
         run_servercopy.assert_called_once()
@@ -833,6 +838,7 @@ class WorkflowTests(unittest.TestCase):
             patch.object(servercopy_cron, "ping_failure", failure),
             patch.object(servercopy_cron, "run_git") as run_git,
             patch.object(servercopy_cron, "ping_success") as ping_success,
+            redirect_stdout(StringIO()),
             redirect_stderr(StringIO()),
         ):
             status = servercopy_cron.run_cron_workflow(
@@ -874,6 +880,7 @@ class WorkflowTests(unittest.TestCase):
                 side_effect=servercopy_cron.HealthchecksPingError,
             ) as ping_failure,
             patch.object(servercopy_cron, "run_git") as run_git,
+            redirect_stdout(StringIO()),
             redirect_stderr(error_output),
         ):
             status = servercopy_cron.run_cron_workflow(
@@ -912,6 +919,7 @@ class WorkflowTests(unittest.TestCase):
                 ) as run_git,
                 patch.object(servercopy_cron, "ping_failure") as ping_failure,
                 patch.object(servercopy_cron, "ping_success") as ping_success,
+                redirect_stdout(StringIO()),
                 redirect_stderr(error_output),
             ):
                 status = servercopy_cron.run_cron_workflow(
@@ -946,6 +954,7 @@ class WorkflowTests(unittest.TestCase):
                 ) as run_git,
                 patch.object(servercopy_cron, "ping_failure") as ping_failure,
                 patch.object(servercopy_cron, "ping_success") as ping_success,
+                redirect_stdout(StringIO()),
                 redirect_stderr(StringIO()),
             ):
                 status = servercopy_cron.run_cron_workflow(
@@ -978,6 +987,7 @@ class WorkflowTests(unittest.TestCase):
                 patch.object(servercopy_cron, "run_git", side_effect=responses),
                 patch.object(servercopy_cron, "ping_failure") as ping_failure,
                 patch.object(servercopy_cron, "ping_success") as ping_success,
+                redirect_stdout(StringIO()),
                 redirect_stderr(StringIO()),
             ):
                 status = servercopy_cron.run_cron_workflow(
@@ -1014,6 +1024,7 @@ class WorkflowTests(unittest.TestCase):
                 ) as run_git,
                 patch.object(servercopy_cron, "ping_failure") as ping_failure,
                 patch.object(servercopy_cron, "ping_success") as ping_success,
+                redirect_stdout(StringIO()),
                 redirect_stderr(StringIO()),
             ):
                 status = servercopy_cron.run_cron_workflow(
@@ -1065,6 +1076,7 @@ class WorkflowTests(unittest.TestCase):
                     side_effect=lambda uuid, message: events.append("failure"),
                 ) as ping_failure,
                 patch.object(servercopy_cron, "ping_success") as ping_success,
+                redirect_stdout(StringIO()),
                 redirect_stderr(StringIO()),
             ):
                 status = servercopy_cron.run_cron_workflow(
@@ -1078,7 +1090,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.4.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.1]",
                 "failure",
             ],
         )
@@ -1221,7 +1233,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.4.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.1]",
                 "success",
             ],
         )
@@ -1282,7 +1294,7 @@ class WorkflowTests(unittest.TestCase):
                 "commit",
                 "-m",
                 "servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.4.0]",
+                "[servercopy=1.8.2 servercopy_cron=2.4.1]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)
@@ -1389,6 +1401,10 @@ class LoggingTests(unittest.TestCase):
             transcript = log_path.read_text(encoding="utf-8")
 
         self.assertEqual(status, 17)
+        self.assertIn(
+            f"servercopy version: {SERVERCOPY_VERSION}",
+            transcript,
+        )
         self.assertIn("live synchronization output", transcript)
         self.assertIn("servercopy failed (exit status 17)", transcript)
         self.assertIn("failure ping also failed", transcript)
@@ -1528,7 +1544,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.4.0\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.4.1\n")
                 load_uuid.assert_not_called()
                 logged_workflow.assert_not_called()
                 flock.assert_not_called()
@@ -1869,7 +1885,7 @@ class MainTests(unittest.TestCase):
             transcript_text = logs[0].read_text(encoding="utf-8")
             for expected in (
                 "servercopy_cron started: 2026-07-27T19:56:50Z",
-                "servercopy_cron version: 2.4.0",
+                "servercopy_cron version: 2.4.1",
                 "invocation: operator@host.example.org",
                 "system: TestOS-1.0",
                 f"MERMAID: {mermaid_root}",

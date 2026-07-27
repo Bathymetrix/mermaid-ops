@@ -31,7 +31,7 @@ if sys.version_info < MIN_VERSION:
     )
 
 
-SERVERCOPY_CRON_VERSION = "2.4.0"
+SERVERCOPY_CRON_VERSION = "2.4.1"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
 FAILURE_EXCERPT_CHARACTERS = 2_000
@@ -511,6 +511,7 @@ def run_cron_workflow(
             log_path,
             transcript,
         )
+    print(f"servercopy version: {servercopy_version}")
 
     servercopy_status = run_servercopy(servercopy_command, servers_repository)
     if servercopy_status != 0:

@@ -149,6 +149,9 @@ command: <safely rendered argv>
 log: <log path>
 ```
 
+After the monitored workflow successfully determines the synchronization
+engine version, the transcript records `servercopy version: <version>`.
+
 Lightweight operations remain outside this logging boundary.
 `servercopy_cron --version` exits before lock acquisition, monitoring
 configuration, or log creation. A missing `MERMAID` also retains direct
@@ -275,7 +278,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.1]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the

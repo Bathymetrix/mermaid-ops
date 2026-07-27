@@ -347,6 +347,8 @@ does not perform logging or shell redirection. Logging begins immediately after
 those startup failures are recorded too. Each log begins with the UTC start
 time, wrapper version, invoking user and fully qualified hostname, system
 information, resolved paths, safely rendered command, and log path.
+After the monitored workflow successfully determines the synchronization
+engine version, the log also records it as `servercopy version: <version>`.
 
 `servercopy_cron --version` remains a lightweight, log-free operation. If
 `MERMAID` is absent, the wrapper reports the error directly to stderr because
@@ -439,7 +441,7 @@ changes exist. The message records the UTC timestamp and both independently
 versioned executables:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.1]
 ```
 
 `servercopy_cron` obtains the `servercopy` version through the latter's public
