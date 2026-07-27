@@ -419,7 +419,7 @@ runs `git add -A`, and creates a commit only when changes exist. The message
 records the UTC timestamp and both independently versioned executables:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.1.1]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.1.2]
 ```
 
 `servercopy_cron` obtains the `servercopy` version through the latter's public

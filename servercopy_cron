@@ -23,7 +23,7 @@ if sys.version_info < MIN_VERSION:
     )
 
 
-SERVERCOPY_CRON_VERSION = "2.1.1"
+SERVERCOPY_CRON_VERSION = "2.1.2"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
 
@@ -199,12 +199,25 @@ def get_servercopy_version(command: Path) -> str | None:
 def run_git(
     repository: Path, *arguments: str
 ) -> subprocess.CompletedProcess[str]:
+    # NOTE: Use cwd= rather than git -C. Frisius and potentially other legacy
+    # HPC systems ship Git 1.8.x, which predates git -C. Do not modernize this
+    # without verifying that every supported deployment target has newer Git.
     return subprocess.run(
-        ["git", "-C", str(repository), *arguments],
+        ["git", *arguments],
+        cwd=repository,
         check=False,
         capture_output=True,
         text=True,
     )
+
+
+def report_git_failure(
+    message: str,
+    result: subprocess.CompletedProcess[str],
+) -> None:
+    print(message, file=sys.stderr)
+    if error := result.stderr.strip():
+        print(f"Git reported: {error}", file=sys.stderr)
 
 
 def commit_synced_changes(
@@ -216,9 +229,9 @@ def commit_synced_changes(
     try:
         worktree = run_git(servers_repository, "rev-parse", "--show-toplevel")
         if worktree.returncode != 0 or not worktree.stdout.strip():
-            print(
+            report_git_failure(
                 "Error: the servers directory is not a Git working tree.",
-                file=sys.stderr,
+                worktree,
             )
             return 1
         if Path(worktree.stdout.strip()).resolve() != servers_repository.resolve():
@@ -239,18 +252,18 @@ def commit_synced_changes(
             )
             return 1
         if initial_index.returncode != 0:
-            print(
+            report_git_failure(
                 "Error: could not inspect the servers Git index "
                 f"(git exit status {initial_index.returncode}).",
-                file=sys.stderr,
+                initial_index,
             )
             return 1
 
         staged = run_git(servers_repository, "add", "-A")
         if staged.returncode != 0:
-            print(
+            report_git_failure(
                 f"Error: git add failed (exit status {staged.returncode}).",
-                file=sys.stderr,
+                staged,
             )
             return 1
 
@@ -261,10 +274,10 @@ def commit_synced_changes(
             print("servercopy completed successfully; no changes to commit.")
             return 0
         if updated_index.returncode != 1:
-            print(
+            report_git_failure(
                 "Error: could not inspect the staged server changes "
                 f"(git exit status {updated_index.returncode}).",
-                file=sys.stderr,
+                updated_index,
             )
             return 1
 
@@ -275,9 +288,9 @@ def commit_synced_changes(
         )
         committed = run_git(servers_repository, "commit", "-m", message)
         if committed.returncode != 0:
-            print(
+            report_git_failure(
                 f"Error: git commit failed (exit status {committed.returncode}).",
-                file=sys.stderr,
+                committed,
             )
             return 1
     except OSError as error:

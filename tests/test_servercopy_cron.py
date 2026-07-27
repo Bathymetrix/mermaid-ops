@@ -207,6 +207,30 @@ class HealthchecksHttpTests(unittest.TestCase):
 
 
 class SubprocessTests(unittest.TestCase):
+    def test_git_uses_repository_as_working_directory(self) -> None:
+        completed = git_result(0)
+        repository = Path("/mermaid/servers")
+
+        with patch.object(
+            servercopy_cron.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            result = servercopy_cron.run_git(
+                repository,
+                "rev-parse",
+                "--show-toplevel",
+            )
+
+        self.assertIs(result, completed)
+        run.assert_called_once_with(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=repository,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
     def test_servercopy_version_is_read_from_exact_version_command(self) -> None:
         completed = subprocess.CompletedProcess(
             ["servercopy", "--version"],
@@ -293,6 +317,36 @@ class SubprocessTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_git_worktree_failure_reports_git_stderr(self) -> None:
+        servers = Path("/mermaid/servers")
+        error_output = StringIO()
+
+        with (
+            patch.object(
+                servercopy_cron,
+                "run_git",
+                return_value=git_result(
+                    128,
+                    stderr="fatal: not a git repository",
+                ),
+            ),
+            redirect_stderr(error_output),
+        ):
+            status = servercopy_cron.commit_synced_changes(
+                servers,
+                SERVERCOPY_VERSION,
+            )
+
+        self.assertNotEqual(status, 0)
+        self.assertIn(
+            "the servers directory is not a Git working tree",
+            error_output.getvalue(),
+        )
+        self.assertIn(
+            "fatal: not a git repository",
+            error_output.getvalue(),
+        )
+
     def test_start_failure_prevents_servercopy_and_git(self) -> None:
         error_output = StringIO()
 
@@ -643,7 +697,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.1.1]",
+                "[servercopy=1.8.2 servercopy_cron=2.1.2]",
                 "failure",
             ],
         )
@@ -786,7 +840,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.1.1]",
+                "[servercopy=1.8.2 servercopy_cron=2.1.2]",
                 "success",
             ],
         )
@@ -847,7 +901,7 @@ class WorkflowTests(unittest.TestCase):
                 "commit",
                 "-m",
                 "servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=1.8.2 servercopy_cron=2.1.1]",
+                "[servercopy=1.8.2 servercopy_cron=2.1.2]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)
@@ -871,7 +925,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.1.1\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.1.2\n")
                 load_uuid.assert_not_called()
 
     def test_missing_mermaid_fails_before_any_work(self) -> None:

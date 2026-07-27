@@ -201,15 +201,13 @@ process.
 
 With a clean index, the wrapper runs:
 
-```sh
-git -C "$MERMAID/servers" add -A
-```
+`git add -A` with `$MERMAID/servers` as its working directory.
 
 If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.1.1]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.1.2]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
