@@ -38,8 +38,20 @@ restricted cron `PATH` of `/usr/bin:/bin`:
 /usr/bin/env PATH=/usr/bin:/bin lftp --version
 ```
 
-Install missing system commands through the Frisius administrator or its
-supported operating-system package manager. The repository itself has no
+Install `lftp` on Frisius with:
+
+```bash
+sudo yum install lftp
+```
+
+Frisius currently provides `lftp 4.4.8`. `servercopy` intentionally uses only
+the smallest practical, legacy-compatible command subset validated on the
+production environments. Do not substitute newer settings or mirror flags
+without first demonstrating an operational need on every supported deployment
+target.
+
+Install any other missing system commands through the Frisius administrator or
+its supported operating-system package manager. The repository itself has no
 third-party Python dependencies.
 
 ## Install Miniforge
@@ -204,6 +216,11 @@ MERMAID=/home/jdsimon/mermaid \
 Confirm that the synchronization finishes, the servers repository contains the
 expected commit or clean no-change result, the timestamped workflow log records
 exit status zero, and Healthchecks.io records a successful run.
+
+The initial remote listing and comparison may be quiet for approximately ten
+minutes, including when no new files exist. That delay is expected. A
+`servercopy` heartbeat during this phase means only that the `lftp` child is
+still alive.
 
 ## Install the production crontab
 

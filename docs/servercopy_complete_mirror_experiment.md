@@ -1,57 +1,58 @@
-# Servercopy Complete-Mirror Experiment
+# Servercopy Whole-Tree Mirror Design
 
-## Decision
+## Maintainer warning
 
-Do not replace the current suffix-specific synchronization strategy with the
-tested complete-recursive-mirror implementation. The repository was
-intentionally restored to the previously working implementation, and the
-experiment was abandoned before deployment.
+> This implementation is intentionally plain. It targets the legacy `lftp
+> 4.4.8` available on Frisius and has been validated against the production
+> data layout. Do not replace the single whole-tree `mirror` with suffix
+> discovery, generated file lists, capability-dependent flags, output parsing,
+> or custom progress handling merely to make the implementation appear more
+> sophisticated. Change it only in response to a demonstrated operational
+> failure.
 
-Correctness and operational robustness currently take priority over reducing
-the number of mirror commands.
+## Transfer model
 
-## Implementations compared
-
-The current implementation runs eight suffix-specific mirror commands for each
-configured source. Each command identifies its remote selection and exact local
-destination explicitly:
+Every configured source follows the same sequence:
 
 ```text
-mirror <options> --file=<remote-root>/*<suffix> \
-    --target-directory=<output>/<user>
+connect
+cd <configured remote directory>
+lcd <configured local destination>
+mirror
 ```
 
-The stashed experiment removed suffix selection. It changed to the configured
-remote directory with `cd` where needed, selected `<output>/<user>` with `lcd`,
-and then ran one recursive mirror with no source or destination arguments:
+Configuration supplies the protocol, host, username and credentials, remote
+directory, and logical-user destination. The transfer implementation has no
+Kobe-, ESO-, RUDICS-, or endpoint-specific branches.
 
-```text
-mirror --verbose --continue --overwrite --no-perms --parallel=4
-```
+FTPS uses the three TLS settings validated on the production-style Frisius
+environment. SFTP uses its direct connection URL without optional modern
+settings. Both protocols then use one whole-tree `mirror`. Normal operation
+does not request deletion, reverse mirroring, or forced overwrites.
 
-The intended benefit was a simpler synchronization policy with one remote
-comparison pass instead of the repeated passes caused by multiple mirror
-operations.
+This whole-tree model replaced fixed suffix allowlists, numbered-suffix
+discovery, generated file selections, and repeated suffix-specific mirror
+passes for all supported endpoints.
 
-The stash is not a minimal mirror-command patch. It also contains changes to
-progress reporting, redaction, dry-run directory handling, the retained RUDICS
-script, tests, and documentation. It should not be reapplied wholesale as a
-production change.
+## Production evidence
 
-## Observed result
+Frisius provides legacy `lftp 4.4.8`. The minimal FTPS connection and plain
+mirror were tested against an existing Kobe destination containing 5,858
+files. The comparison correctly identified only 6 new files and 9 modified
+files, transferring 3,094,464 bytes rather than recopying the complete tree.
 
-During testing, the `kobeuni` endpoint produced no lftp output for 900 seconds.
-The servercopy silence watchdog then terminated the process. The lack of output
-does not establish what internal operation lftp was performing during that
-interval.
+Remote listing and comparison took roughly ten minutes before transfer began.
+Comparable delays have occurred on macOS and on runs that ultimately found no
+new files. A long quiet comparison phase is therefore normal and should not be
+"optimized" without evidence of an actual operational problem.
 
-The complete-mirror implementation therefore did not demonstrate usable
-production behavior and was abandoned before deployment. Its changes remain in
-git stash only as material for possible future investigation.
+## Output and heartbeat
 
-## Future work
+Native `lftp` output is forwarded without a line-oriented progress parser, so
+interactive progress can update a single terminal line with carriage returns.
+`servercopy` does not infer transfer activity from that output.
 
-Any further optimization should start with small, focused experiments against
-one endpoint and measure observable behavior before replacing the production
-synchronization strategy. A simpler architecture is not an improvement unless
-it preserves correctness and unattended operational reliability.
+The periodic heartbeat reports one fact only: the `lftp` child process is still
+alive. It does not mean bytes are moving, the remote listing is advancing, or
+the transfer will eventually succeed. There is no output-silence watchdog;
+`lftp`'s own exit status determines success or failure.

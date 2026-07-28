@@ -3,11 +3,11 @@
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
-import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "servercopy"
@@ -19,7 +19,7 @@ sys.modules[LOADER.name] = servercopy
 LOADER.exec_module(servercopy)
 
 
-def taal_source(user: str = "eso") -> servercopy.Source:
+def ftps_source(user: str = "eso") -> servercopy.Source:
     return servercopy.Source(
         user,
         "automaid",
@@ -30,7 +30,7 @@ def taal_source(user: str = "eso") -> servercopy.Source:
     )
 
 
-def rudics_source(user: str = "s_m0057") -> servercopy.Source:
+def sftp_source(user: str = "s_m0057") -> servercopy.Source:
     return servercopy.Source(
         user,
         user,
@@ -41,368 +41,284 @@ def rudics_source(user: str = "s_m0057") -> servercopy.Source:
     )
 
 
-class NumberedSuffixParsingTests(unittest.TestCase):
-    def test_no_numbered_suffixes(self) -> None:
-        self.assertEqual(servercopy.parse_numbered_suffixes("foo.MER\nbar.LOG\n"), ())
+class MirrorScriptTests(unittest.TestCase):
+    forbidden_fragments = (
+        "--file",
+        "--target-directory",
+        "--overwrite",
+        "--delete",
+        "xfer:timeout",
+        "sftp:auto-confirm",
+        "cls ",
+        "suffix=",
+    )
 
-    def test_one_zero_suffix(self) -> None:
-        self.assertEqual(servercopy.parse_numbered_suffixes("foo.000\n"), (".000",))
-
-    def test_contiguous_suffixes_are_numerically_sorted(self) -> None:
-        listing = "root/foo.002\nfoo.000\nother/path/bar.001\n"
-
-        self.assertEqual(
-            servercopy.parse_numbered_suffixes(listing),
-            (".000", ".001", ".002"),
-        )
-
-    def test_duplicate_suffixes_are_reduced_to_one(self) -> None:
-        listing = "foo.000\nbar.000\nbaz.001\n"
-
-        self.assertEqual(servercopy.parse_numbered_suffixes(listing), (".000", ".001"))
-
-    def test_invalid_forms_and_numbered_directories_are_ignored(self) -> None:
-        listing = (
-            "short.00\nlong.0000\nletters.ABC\ntrailing.001.tmp\n"
-            "digits001\ndirectory.000/\nordinary.MER\n"
-        )
-
-        self.assertEqual(servercopy.parse_numbered_suffixes(listing), ())
-
-    def test_sequence_must_begin_at_zero(self) -> None:
-        with self.assertRaisesRegex(
-            servercopy.ConfigError,
-            r"found \.001 after missing \.000",
-        ):
-            servercopy.parse_numbered_suffixes("foo.001\n")
-
-    def test_sequence_cannot_contain_a_gap(self) -> None:
-        with self.assertRaisesRegex(
-            servercopy.ConfigError,
-            r"found \.003 after missing \.002",
-        ):
-            servercopy.parse_numbered_suffixes("foo.003\nfoo.000\nfoo.001\n")
-
-
-class RecoveredMirrorTests(unittest.TestCase):
-    def test_authoritative_suffix_tuple_is_hardcoded_in_required_order(self) -> None:
-        self.assertEqual(
-            servercopy.FIXED_SYNC_SUFFIXES,
-            (".MER", ".LOG", ".BIN", ".cmd", ".out", ".vit", ".S41", ".S61"),
-        )
-        self.assertFalse(hasattr(servercopy, "SUFFIX_ALLOWLIST"))
-        self.assertFalse(hasattr(servercopy, "load_suffix_globs"))
-
-    def test_historical_mer_shape_is_repeated_in_stable_suffix_order(self) -> None:
-        for user in ("eso", "kobeuni"):
-            with self.subTest(user=user):
+    def test_each_protocol_uses_one_whole_tree_mirror(self) -> None:
+        for source in (sftp_source(), ftps_source()):
+            with self.subTest(protocol=source.protocol):
+                destination = Path("/tmp/servers") / source.user
                 script = servercopy.build_lftp_script(
-                    taal_source(user),
+                    source,
                     "fake-password",
-                    Path(f"/tmp/servers/{user}"),
+                    destination,
                     False,
                 )
-                mirrors = [
-                    line for line in script.splitlines() if line.startswith("mirror ")
-                ]
-                expected = [
-                    'mirror "--verbose" "--continue" "--overwrite" "--no-perms" '
-                    '"--no-empty-dirs" "--parallel=4" '
-                    f'"--file={user}/*{suffix}" '
-                    f'"--target-directory=/tmp/servers/{user}"'
-                    for suffix in servercopy.FIXED_SYNC_SUFFIXES
-                ]
+                lines = script.splitlines()
 
-                self.assertEqual(mirrors, expected)
-                self.assertEqual(script.count("open -u "), 1)
-                self.assertEqual(script.count("set cmd:fail-exit yes"), 1)
-                self.assertEqual(script.count("bye"), 1)
+                self.assertEqual(lines.count("mirror"), 1)
                 self.assertEqual(
-                    mirrors[0],
-                    'mirror "--verbose" "--continue" "--overwrite" "--no-perms" '
-                    '"--no-empty-dirs" "--parallel=4" '
-                    f'"--file={user}/*.MER" '
-                    f'"--target-directory=/tmp/servers/{user}"',
+                    lines[-4:],
+                    [
+                        f'cd "{source.remote_root}"',
+                        f'lcd "{destination}"',
+                        "mirror",
+                        "bye",
+                    ],
                 )
-                self.assertNotIn("lcd ", script)
-                self.assertNotIn('mirror "-c" "-f"', script)
-                self.assertNotIn("include-glob", script)
-                self.assertNotIn("exclude-glob", script)
+                self.assertEqual(script.count("open -u "), 1)
+                for fragment in self.forbidden_fragments:
+                    self.assertNotIn(fragment, script)
 
-                for suffix, command in zip(
-                    servercopy.FIXED_SYNC_SUFFIXES, mirrors, strict=True
-                ):
-                    self.assertEqual(command.count(f'--file={user}/*{suffix}'), 1)
-                    self.assertEqual(command.count(f'--target-directory=/tmp/servers/{user}'), 1)
+    def test_transfer_command_shape_is_identical_for_every_endpoint(self) -> None:
+        command_shapes = []
+        for source in (sftp_source(), ftps_source(), ftps_source("kobeuni")):
+            script = servercopy.build_lftp_script(
+                source,
+                "fake-password",
+                Path("/tmp/servers") / source.user,
+                False,
+            )
+            lines = script.splitlines()
+            command_shapes.append(
+                [
+                    lines[-4].split(maxsplit=1)[0],
+                    lines[-3].split(maxsplit=1)[0],
+                    lines[-2],
+                    lines[-1],
+                ]
+            )
 
-    def test_each_mirror_has_a_visible_suffix_marker(self) -> None:
+        self.assertEqual(command_shapes, [["cd", "lcd", "mirror", "bye"]] * 3)
+
+    def test_ftps_uses_only_validated_tls_settings(self) -> None:
         script = servercopy.build_lftp_script(
-            taal_source(), "fake-password", Path("/tmp/servers/eso"), True
-        )
-
-        markers = [
-            line for line in script.splitlines() if "step=mirror suffix=" in line
-        ]
-        self.assertEqual(
-            markers,
-            [
-                f'echo "[servercopy] step=mirror suffix={suffix}"'
-                for suffix in servercopy.FIXED_SYNC_SUFFIXES
-            ],
-        )
-        self.assertEqual(
-            script.count('"--dry-run"'), len(servercopy.FIXED_SYNC_SUFFIXES)
-        )
-
-    def test_numbered_mirrors_follow_fixed_mirrors_in_order(self) -> None:
-        script = servercopy.build_lftp_script(
-            taal_source(),
+            ftps_source(),
             "fake-password",
             Path("/tmp/servers/eso"),
             False,
-            (".000", ".001", ".002"),
-        )
-        mirrors = [line for line in script.splitlines() if line.startswith("mirror ")]
-
-        self.assertEqual(len(mirrors), len(servercopy.FIXED_SYNC_SUFFIXES) + 3)
-        self.assertIn('"--file=eso/*.S61"', mirrors[-4])
-        for suffix, command in zip((".000", ".001", ".002"), mirrors[-3:], strict=True):
-            self.assertEqual(
-                command,
-                'mirror "--verbose" "--continue" "--overwrite" "--no-perms" '
-                '"--no-empty-dirs" "--parallel=4" '
-                f'"--file=eso/*{suffix}" '
-                '"--target-directory=/tmp/servers/eso"',
-            )
-
-    def test_numbered_mirrors_keep_common_options_and_dry_run(self) -> None:
-        script = servercopy.build_lftp_script(
-            taal_source(),
-            "fake-password",
-            Path("/tmp/servers/eso"),
-            True,
-            (".000", ".001"),
-        )
-        numbered = [
-            line
-            for line in script.splitlines()
-            if line.startswith("mirror ") and ("/*.000" in line or "/*.001" in line)
-        ]
-
-        self.assertEqual(len(numbered), 2)
-        for command in numbered:
-            for option in servercopy.COMMON_OPTIONS:
-                self.assertIn(f'"{option}"', command)
-            self.assertIn('"--dry-run"', command)
-            self.assertIn('"--target-directory=/tmp/servers/eso"', command)
-
-
-class NumberedSuffixDiscoveryTests(unittest.TestCase):
-    def test_discovery_uses_cls_not_mirror_for_each_protocol(self) -> None:
-        for source in (taal_source(), rudics_source()):
-            with self.subTest(protocol=source.protocol):
-                script = servercopy.build_discovery_lftp_script(source, "fake-password")
-
-                self.assertIn("set cmd:fail-exit yes", script)
-                self.assertIn("set cmd:trace no", script)
-                self.assertIn("set net:timeout 30s", script)
-                self.assertIn("set net:max-retries 2", script)
-                self.assertIn("set xfer:timeout 5m", script)
-                self.assertIn("cls -1 ", script)
-                self.assertIn('set cmd:cls-default ""', script)
-                self.assertNotIn("mirror ", script)
-
-    def test_discovery_preserves_ftps_protected_listing_settings(self) -> None:
-        script = servercopy.build_discovery_lftp_script(
-            taal_source(), "fake-password"
         )
 
         self.assertIn("set ftp:ssl-force yes", script)
         self.assertIn("set ftp:ssl-protect-data yes", script)
         self.assertIn("set ftp:ssl-protect-list yes", script)
-        self.assertIn("set ssl:verify-certificate yes", script)
-        self.assertIn('cls -1 "eso/"', script)
-
-    def test_discovery_returns_suffixes_without_printing_inventory(self) -> None:
-        report = MagicMock()
-        with patch.object(
-            servercopy,
-            "run_lftp",
-            return_value=(0, ["foo.001", "bar.000", "baz.001"]),
-        ) as run_lftp:
-            suffixes = servercopy.discover_remote_numbered_suffixes(
-                "/mock/lftp",
-                rudics_source(),
-                "fake-password",
-                report,
-                "dry-run",
-            )
-
-        self.assertEqual(suffixes, (".000", ".001"))
-        self.assertTrue(run_lftp.call_args.kwargs["stream_output"] is False)
-        messages = [call.args[0] for call in report.write.call_args_list]
-        self.assertEqual(
-            messages,
-            [
-                "[servercopy] step=discover-numbered-suffixes",
-                "[servercopy] discovered-numbered-suffixes=.000,.001",
-            ],
+        self.assertNotIn("set ssl:verify-certificate", script)
+        self.assertIn(
+            'open -u "automaid","fake-password" "ftp://taal.unice.fr:21"',
+            script,
         )
-        self.assertNotIn("foo.001", messages)
 
-    def test_empty_discovery_reports_none(self) -> None:
-        report = MagicMock()
-        with patch.object(servercopy, "run_lftp", return_value=(0, ["foo.MER"])):
-            suffixes = servercopy.discover_remote_numbered_suffixes(
-                "/mock/lftp", taal_source(), "fake-password", report, "sync"
-            )
+    def test_sftp_has_no_unnecessary_protocol_settings(self) -> None:
+        script = servercopy.build_lftp_script(
+            sftp_source(),
+            "fake-password",
+            Path("/tmp/servers/s_m0057"),
+            False,
+        )
 
-        self.assertEqual(suffixes, ())
-        report.write.assert_any_call("[servercopy] discovered-numbered-suffixes=none")
+        self.assertNotIn("set sftp:", script)
+        self.assertNotIn("set ftp:", script)
+        self.assertIn(
+            'open -u "s_m0057","fake-password" '
+            '"sftp://rudics.thorium.cls.fr:22"',
+            script,
+        )
 
-    def test_discovery_failure_is_identified(self) -> None:
-        with patch.object(
-            servercopy,
-            "run_lftp",
-            return_value=(1, ["cls: Access failed"]),
-        ):
-            with self.assertRaisesRegex(
-                servercopy.ConfigError,
-                "numbered suffix discovery failed",
-            ):
-                servercopy.discover_remote_numbered_suffixes(
-                    "/mock/lftp",
-                    taal_source(),
-                    "fake-password",
-                    MagicMock(),
-                    "sync",
-                )
+    def test_dry_run_remains_one_whole_tree_preview(self) -> None:
+        script = servercopy.build_lftp_script(
+            sftp_source(),
+            "fake-password",
+            Path("/tmp/servers/s_m0057"),
+            True,
+        )
+        mirrors = [line for line in script.splitlines() if line.startswith("mirror")]
+
+        self.assertEqual(mirrors, ['mirror "--dry-run"'])
+        for fragment in self.forbidden_fragments:
+            self.assertNotIn(fragment, script)
 
 
 class LftpRunnerTests(unittest.TestCase):
-    def test_default_silence_watchdog_is_fifteen_minutes(self) -> None:
-        self.assertEqual(servercopy.LFTP_SILENCE_TIMEOUT_SECONDS, 900.0)
-
-    def test_lftp_output_replaces_invalid_text_bytes(self) -> None:
+    @staticmethod
+    def process(
+        *,
+        output: list[bytes] | None = None,
+        waits: list[object] | None = None,
+    ) -> MagicMock:
         process = MagicMock()
-        process.stdout.readline.side_effect = [b"bad:\xff\n", b""]
-        process.wait.return_value = 0
+        process.stdin = MagicMock()
+        process.stdout = MagicMock()
+        process.stdout.read1.side_effect = [*(output or []), b""]
+        process.wait.side_effect = waits or [0]
+        return process
+
+    def test_child_exit_status_is_propagated(self) -> None:
+        process = self.process(waits=[7])
         report = MagicMock()
 
-        with patch.object(servercopy.subprocess, "Popen", return_value=process) as popen:
-            code, lines = servercopy.run_lftp(
-                "lftp", "bye\n", report, "sync", "eso", heartbeat_seconds=1
+        with patch.object(
+            servercopy.subprocess,
+            "Popen",
+            return_value=process,
+        ) as popen:
+            status = servercopy.run_lftp(
+                "/mock/lftp",
+                "mirror\nbye\n",
+                report,
+                "sync",
+                "eso",
             )
 
-        self.assertEqual((code, lines), (0, ["bad:\ufffd"]))
-        report.write.assert_called_once_with("bad:\ufffd")
-        process.stdin.write.assert_called_once_with(b"bye\n")
-        self.assertEqual(popen.call_args.args, (["lftp"],))
+        self.assertEqual(status, 7)
+        self.assertEqual(popen.call_args.args, (["/mock/lftp"],))
+        self.assertIn(b"mirror\nbye\n", process.stdin.write.call_args.args)
 
-    def test_lftp_reports_when_output_is_silent(self) -> None:
-        process = MagicMock()
-
-        def delayed_eof() -> bytes:
-            time.sleep(0.03)
-            return b""
-
-        process.stdout.readline.side_effect = delayed_eof
-        process.wait.return_value = 0
+    def test_native_carriage_return_output_is_forwarded_without_line_parsing(self) -> None:
+        process = self.process(output=[b"10%\r20%\r", b"done\n"])
         report = MagicMock()
 
         with patch.object(servercopy.subprocess, "Popen", return_value=process):
-            code, lines = servercopy.run_lftp(
-                "lftp", "bye\n", report, "sync", "eso", heartbeat_seconds=0.01
+            status = servercopy.run_lftp(
+                "/mock/lftp",
+                "bye\n",
+                report,
+                "sync",
+                "eso",
             )
 
-        self.assertEqual((code, lines), (0, []))
-        messages = [call.args[0] for call in report.write.call_args_list]
-        self.assertTrue(any(message.startswith("[sync] still-running") for message in messages))
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            "".join(item.args[0] for item in report.write_raw.call_args_list),
+            "10%\r20%\rdone\n",
+        )
 
-    def test_lftp_heartbeat_identifies_active_suffix(self) -> None:
-        process = MagicMock()
-        output_count = 0
-
-        def marker_then_delayed_eof() -> bytes:
-            nonlocal output_count
-            output_count += 1
-            if output_count == 1:
-                return b"[servercopy] step=mirror suffix=.LOG\n"
-            time.sleep(0.03)
-            return b""
-
-        process.stdout.readline.side_effect = marker_then_delayed_eof
-        process.wait.return_value = 0
+    def test_invalid_output_bytes_are_replaced(self) -> None:
+        process = self.process(output=[b"bad:\xff\n"])
         report = MagicMock()
 
         with patch.object(servercopy.subprocess, "Popen", return_value=process):
             servercopy.run_lftp(
-                "lftp", "bye\n", report, "sync", "eso", heartbeat_seconds=0.01
-            )
-
-        messages = [call.args[0] for call in report.write.call_args_list]
-        self.assertTrue(
-            any("still-running user=eso suffix=.LOG" in message for message in messages)
-        )
-
-    def test_lftp_watchdog_returns_124(self) -> None:
-        process = MagicMock()
-
-        def delayed_eof() -> bytes:
-            time.sleep(0.05)
-            return b""
-
-        process.stdout.readline.side_effect = delayed_eof
-        process.wait.return_value = -15
-
-        with patch.object(servercopy.subprocess, "Popen", return_value=process):
-            code, lines = servercopy.run_lftp(
-                "lftp",
+                "/mock/lftp",
                 "bye\n",
-                MagicMock(),
+                report,
                 "sync",
                 "eso",
-                heartbeat_seconds=0.01,
-                silence_timeout_seconds=0.02,
             )
 
-        self.assertEqual(code, 124)
-        self.assertIn("lftp timed out", lines[-1])
-        process.terminate.assert_called_once_with()
+        report.write_raw.assert_called_once_with("bad:\ufffd\n")
 
-    def test_lftp_output_redacts_url_credentials(self) -> None:
-        output = "get ftp://example-user:pa@ss@example.test/file"
-
-        redacted = servercopy.redact_lftp_output(output)
-
-        self.assertEqual(redacted, "get ftp://[REDACTED]@example.test/file")
-
-    def test_discovery_credentials_are_absent_from_argv_output_and_errors(self) -> None:
-        password = "fake-secret-password"
-        process = MagicMock()
-        process.stdout.readline.side_effect = [
-            f"open: Access failed: ftp://automaid:{password}@taal.example/\n".encode(),
-            b"",
-        ]
-        process.wait.return_value = 1
+    def test_output_redacts_credential_bearing_urls(self) -> None:
+        process = self.process(
+            output=[
+                b"open: sf",
+                b"tp://login:secret@exam",
+                b"ple.test/path failed\n",
+            ]
+        )
         report = MagicMock()
 
-        with patch.object(servercopy.subprocess, "Popen", return_value=process) as popen:
-            with self.assertRaises(servercopy.ConfigError) as raised:
-                servercopy.discover_remote_numbered_suffixes(
-                    "lftp", taal_source(), password, report, "sync"
-                )
+        with patch.object(servercopy.subprocess, "Popen", return_value=process):
+            servercopy.run_lftp(
+                "/mock/lftp",
+                "bye\n",
+                report,
+                "sync",
+                "eso",
+            )
 
-        self.assertEqual(popen.call_args.args, (["lftp"],))
-        self.assertNotIn(password, str(raised.exception))
-        self.assertNotIn(
-            password,
-            "\n".join(call.args[0] for call in report.write.call_args_list),
+        report.write_raw.assert_called_once_with(
+            "open: sftp://[REDACTED]@example.test/path failed\n"
         )
-        self.assertIn(b'"fake-secret-password"', process.stdin.write.call_args.args[0])
+
+    def test_heartbeat_reports_only_process_liveness(self) -> None:
+        timeout = subprocess.TimeoutExpired("/mock/lftp", 30)
+        process = self.process(waits=[timeout, 0])
+        report = MagicMock()
+
+        with (
+            patch.object(servercopy.subprocess, "Popen", return_value=process),
+            patch.object(servercopy.time, "monotonic", side_effect=[100.0, 131.0]),
+        ):
+            status = servercopy.run_lftp(
+                "/mock/lftp",
+                "bye\n",
+                report,
+                "sync",
+                "eso",
+            )
+
+        self.assertEqual(status, 0)
+        report.write.assert_called_once_with(
+            "[sync] still-running user=eso elapsed=31s (process alive)"
+        )
+        process.terminate.assert_not_called()
+
+    def test_long_output_silence_never_triggers_a_watchdog_failure(self) -> None:
+        timeout = subprocess.TimeoutExpired("/mock/lftp", 30)
+        process = self.process(waits=[timeout, timeout, timeout, 0])
+        report = MagicMock()
+
+        with (
+            patch.object(servercopy.subprocess, "Popen", return_value=process),
+            patch.object(
+                servercopy.time,
+                "monotonic",
+                side_effect=[0.0, 300.0, 600.0, 900.0],
+            ),
+        ):
+            status = servercopy.run_lftp(
+                "/mock/lftp",
+                "bye\n",
+                report,
+                "sync",
+                "kobeuni",
+                heartbeat_seconds=300,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(report.write.call_count, 3)
+        self.assertTrue(
+            all(
+                "(process alive)" in item.args[0]
+                for item in report.write.call_args_list
+            )
+        )
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+
+    def test_start_failure_is_reported_cleanly(self) -> None:
+        report = MagicMock()
+
+        with patch.object(
+            servercopy.subprocess,
+            "Popen",
+            side_effect=OSError("not found"),
+        ):
+            status = servercopy.run_lftp(
+                "/mock/lftp",
+                "bye\n",
+                report,
+                "sync",
+                "eso",
+            )
+
+        self.assertEqual(status, 1)
+        report.write.assert_called_once_with(
+            "could not start lftp: not found",
+            error=True,
+        )
 
 
-class CommandTests(unittest.TestCase):
+class ConfigurationTests(unittest.TestCase):
     def test_output_default_and_override(self) -> None:
         default = servercopy.parse_args([])
         overridden = servercopy.parse_args(["--output", "~/alternate-servers"])
@@ -417,31 +333,29 @@ class CommandTests(unittest.TestCase):
 
         self.assertEqual(len(sources), 19)
         self.assertEqual(sources[-1].user, "kobeuni")
+        self.assertEqual(
+            servercopy.SOURCE_FIELDS,
+            ("user", "login", "protocol", "host", "port", "remote_root"),
+        )
 
     def test_source_registry_skips_full_line_comments(self) -> None:
-        comment_lines = ("#user", "# user", "   #user", "   # user", "#", "#    ")
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "sources.csv"
+            path.write_text(
+                ",".join(servercopy.SOURCE_FIELDS)
+                + "\n# inactive endpoint\n"
+                + "active,active,sftp,example.com,22,.\n",
+                encoding="ascii",
+            )
 
-        for comment_line in comment_lines:
-            with self.subTest(comment_line=comment_line):
-                with TemporaryDirectory() as directory:
-                    path = Path(directory) / "sources.csv"
-                    path.write_text(
-                        ",".join(servercopy.SOURCE_FIELDS)
-                        + "\n"
-                        + comment_line
-                        + "\n"
-                        + "active,active,sftp,example.com,22,.\n",
-                        encoding="ascii",
+            self.assertEqual(
+                servercopy.load_sources(path),
+                [
+                    servercopy.Source(
+                        "active", "active", "sftp", "example.com", 22, "."
                     )
-
-                    self.assertEqual(
-                        servercopy.load_sources(path),
-                        [
-                            servercopy.Source(
-                                "active", "active", "sftp", "example.com", 22, "."
-                            )
-                        ],
-                    )
+                ],
+            )
 
     def test_comment_only_credentials_file_is_an_empty_registry(self) -> None:
         with TemporaryDirectory() as directory:
@@ -456,7 +370,8 @@ class CommandTests(unittest.TestCase):
             path.write_text("login,password,extra\n", encoding="ascii")
 
             with self.assertRaisesRegex(
-                servercopy.ConfigError, "malformed credentials line 1"
+                servercopy.ConfigError,
+                "malformed credentials line 1",
             ):
                 servercopy.load_credentials(path)
 
@@ -466,37 +381,185 @@ class CommandTests(unittest.TestCase):
             path.write_text("login,one\nlogin,two\n", encoding="ascii")
 
             with self.assertRaisesRegex(
-                servercopy.ConfigError, "duplicate credential login on line 2"
+                servercopy.ConfigError,
+                "duplicate credential login on line 2",
             ):
                 servercopy.load_credentials(path)
 
-    def test_failure_detail_keeps_diagnostics_not_transfer_chatter(self) -> None:
-        detail = servercopy.lftp_failure_detail(
-            1,
-            [
-                "[servercopy] step=mirror suffix=.MER",
-                "Transferring file `one.MER'",
-                "cls: Access failed",
-            ],
-        )
-
-        self.assertEqual(
-            detail,
-            "lftp exit status 1\n"
-            "[servercopy] step=mirror suffix=.MER\n"
-            "cls: Access failed",
-        )
-
 
 class WorkflowTests(unittest.TestCase):
-    def run_sync_with_lftp_results(
-        self, results: list[tuple[int, list[str]]]
-    ) -> tuple[int, MagicMock, MagicMock, MagicMock, MagicMock]:
-        source = rudics_source()
-        args = servercopy.parse_args(
-            ["--dry-run", "--user", source.user, "--output", "/tmp/servercopy-test"]
-        )
+    def run_dry_workflow(
+        self,
+        sources: list[servercopy.Source],
+        credentials: dict[str, str],
+        lftp_results: list[int] | None = None,
+    ) -> tuple[int, MagicMock, MagicMock]:
         report = MagicMock()
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        output = Path(temporary.name)
+        for source in sources:
+            (output / source.user).mkdir()
+        args = servercopy.parse_args(["--dry-run", "--output", str(output)])
+
+        with (
+            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
+            patch.object(servercopy, "load_sources", return_value=sources),
+            patch.object(servercopy, "load_credentials", return_value=credentials),
+            patch.object(
+                servercopy,
+                "run_lftp",
+                side_effect=lftp_results or ([0] * len(sources)),
+            ) as run_lftp,
+            patch.dict(servercopy.os.environ, {}, clear=True),
+        ):
+            status = servercopy.run_workflow(args, Path("/unused"), report)
+
+        return status, report, run_lftp
+
+    def test_one_mirror_invocation_per_configured_source(self) -> None:
+        sources = [sftp_source(), ftps_source(), ftps_source("kobeuni")]
+        credentials = {
+            source.login: f"password-{source.login}"
+            for source in sources
+        }
+
+        status, _, run_lftp = self.run_dry_workflow(sources, credentials)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(run_lftp.call_count, 3)
+        for source, invocation in zip(sources, run_lftp.call_args_list, strict=True):
+            script = invocation.args[1]
+            self.assertEqual(script.count('mirror "--dry-run"'), 1)
+            self.assertIn(f'cd "{source.remote_root}"', script)
+            lcd_line = next(
+                line for line in script.splitlines() if line.startswith("lcd ")
+            )
+            self.assertTrue(lcd_line.endswith(f"/{source.user}\""))
+
+    def test_nonzero_lftp_status_fails_source_cleanly(self) -> None:
+        source = sftp_source()
+
+        status, report, run_lftp = self.run_dry_workflow(
+            [source],
+            {source.login: "fake-password"},
+            [23],
+        )
+
+        self.assertEqual(status, 1)
+        run_lftp.assert_called_once()
+        report.write.assert_has_calls(
+            [
+                call(
+                    "[dry-run] result=failure user=s_m0057 "
+                    "lftp-exit=23 elapsed=0s"
+                ),
+                call("    lftp exit status 23; see inline lftp output", error=True),
+            ],
+            any_order=True,
+        )
+
+    def test_normal_run_uses_one_plain_mirror_and_records_real_version(self) -> None:
+        source = ftps_source()
+        report = MagicMock()
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "_runs").mkdir()
+            args = servercopy.parse_args(["--output", str(output)])
+            with (
+                patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
+                patch.object(servercopy, "load_sources", return_value=[source]),
+                patch.object(
+                    servercopy,
+                    "load_credentials",
+                    return_value={source.login: "fake-password"},
+                ),
+                patch.object(servercopy, "run_lftp", return_value=0) as run_lftp,
+                patch.object(
+                    servercopy,
+                    "utc_now",
+                    side_effect=[
+                        "2026-07-28T01:00:00Z",
+                        "2026-07-28T01:10:00Z",
+                    ],
+                ),
+                patch.dict(servercopy.os.environ, {}, clear=True),
+            ):
+                status = servercopy.run_workflow(args, Path("/unused"), report)
+
+            self.assertEqual(status, 0)
+            script = run_lftp.call_args.args[1]
+            self.assertEqual(
+                [line for line in script.splitlines() if line.startswith("mirror")],
+                ["mirror"],
+            )
+            self.assertTrue((output / source.user).is_dir())
+            self.assertEqual(
+                (output / "_runs" / "servercopy_runs.csv").read_text(
+                    encoding="ascii"
+                ),
+                "user,result,start,end,ver\n"
+                "eso,success,2026-07-28T01:00:00Z,"
+                "2026-07-28T01:10:00Z,2.0.0\n",
+            )
+
+    def test_missing_credential_skips_source_and_runs_others(self) -> None:
+        missing = sftp_source("s_m0056")
+        runnable = sftp_source("s_m0057")
+
+        status, report, run_lftp = self.run_dry_workflow(
+            [missing, runnable],
+            {runnable.login: "fake-password"},
+        )
+
+        self.assertEqual(status, 0)
+        run_lftp.assert_called_once()
+        report.write.assert_any_call(
+            "Warning: skipping source 's_m0056' (credentials not found)",
+            error=True,
+        )
+        report.write.assert_any_call("  s_m0056 (missing credentials)", error=True)
+
+    def test_all_missing_credentials_exit_nonzero_without_lftp(self) -> None:
+        sources = [sftp_source("s_m0055"), sftp_source("s_m0056")]
+
+        status, report, run_lftp = self.run_dry_workflow(sources, {})
+
+        self.assertEqual(status, 1)
+        run_lftp.assert_not_called()
+        report.write.assert_any_call(
+            "\nError: no runnable sources; all selected sources are missing credentials.",
+            error=True,
+        )
+
+    def test_dry_run_requires_existing_destination_without_creating_it(self) -> None:
+        source = sftp_source()
+        report = MagicMock()
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            args = servercopy.parse_args(["--dry-run", "--output", str(output)])
+            with (
+                patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
+                patch.object(servercopy, "load_sources", return_value=[source]),
+                patch.object(
+                    servercopy,
+                    "load_credentials",
+                    return_value={source.login: "fake-password"},
+                ),
+                patch.object(servercopy, "run_lftp") as run_lftp,
+                patch.dict(servercopy.os.environ, {}, clear=True),
+            ):
+                status = servercopy.run_workflow(args, Path("/unused"), report)
+
+            self.assertEqual(status, 1)
+            self.assertFalse((output / source.user).exists())
+            run_lftp.assert_not_called()
+
+    def test_check_performs_no_remote_execution(self) -> None:
+        source = sftp_source()
+        args = servercopy.parse_args(
+            ["--check", "--user", source.user, "--output", "/tmp/servercopy-check"]
+        )
 
         with (
             patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
@@ -506,231 +569,12 @@ class WorkflowTests(unittest.TestCase):
                 "load_credentials",
                 return_value={source.login: "fake-password"},
             ),
-            patch.object(
-                servercopy, "discover_remote_numbered_suffixes", return_value=()
-            ) as discover,
-            patch.object(servercopy, "run_lftp", side_effect=results) as run_lftp,
-            patch.object(servercopy.time, "sleep") as sleep,
-            patch.dict(servercopy.os.environ, {}, clear=True),
-        ):
-            code = servercopy.run_workflow(args, Path("/unused"), report)
-
-        return code, report, discover, run_lftp, sleep
-
-    def test_connection_timeout_retries_user_once_then_succeeds(self) -> None:
-        timeout = (
-            "connect to host rudics.thorium.cls.fr port 22: Operation timed out"
-        )
-
-        code, report, discover, run_lftp, sleep = self.run_sync_with_lftp_results(
-            [(1, [timeout]), (0, [])]
-        )
-
-        self.assertEqual(code, 0)
-        self.assertEqual(discover.call_count, 2)
-        self.assertEqual(run_lftp.call_count, 2)
-        sleep.assert_called_once_with(60)
-        report.write.assert_any_call(
-            "[dry-run] connection timeout; retrying once after 60 s"
-        )
-        report.write.assert_any_call("[dry-run] retry succeeded")
-
-    def test_connection_timeout_retries_user_once_then_fails(self) -> None:
-        timeout = (
-            "connect to host rudics.thorium.cls.fr port 22: Operation timed out"
-        )
-
-        code, report, discover, run_lftp, sleep = self.run_sync_with_lftp_results(
-            [(1, [timeout]), (1, [timeout])]
-        )
-
-        self.assertEqual(code, 1)
-        self.assertEqual(discover.call_count, 2)
-        self.assertEqual(run_lftp.call_count, 2)
-        sleep.assert_called_once_with(60)
-        report.write.assert_any_call("[dry-run] retry failed")
-        report.write.assert_any_call(f"    {timeout}", error=True)
-
-    def test_authentication_failure_does_not_retry(self) -> None:
-        code, report, discover, run_lftp, sleep = self.run_sync_with_lftp_results(
-            [(1, ["open: Login failed: Authentication failed"])]
-        )
-
-        self.assertEqual(code, 1)
-        discover.assert_called_once()
-        run_lftp.assert_called_once()
-        sleep.assert_not_called()
-        self.assertNotIn(
-            "[dry-run] connection timeout; retrying once after 60 s",
-            [call.args[0] for call in report.write.call_args_list if call.args],
-        )
-
-    def test_non_timeout_failure_does_not_retry(self) -> None:
-        code, report, discover, run_lftp, sleep = self.run_sync_with_lftp_results(
-            [(1, ["mirror: Access failed: Permission denied"])]
-        )
-
-        self.assertEqual(code, 1)
-        discover.assert_called_once()
-        run_lftp.assert_called_once()
-        sleep.assert_not_called()
-        self.assertNotIn(
-            "[dry-run] connection timeout; retrying once after 60 s",
-            [call.args[0] for call in report.write.call_args_list if call.args],
-        )
-
-    def test_sftp_source_discovers_then_receives_numbered_mirror_suffixes(self) -> None:
-        source = rudics_source()
-        args = servercopy.parse_args(
-            ["--dry-run", "--user", source.user, "--output", "/tmp/servercopy-test"]
-        )
-        report = MagicMock()
-
-        with (
-            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
-            patch.object(servercopy, "load_sources", return_value=[source]),
-            patch.object(
-                servercopy, "load_credentials", return_value={source.login: "fake-password"}
-            ),
-            patch.object(
-                servercopy,
-                "discover_remote_numbered_suffixes",
-                return_value=(".000", ".001"),
-            ) as discover,
-            patch.object(servercopy, "run_lftp", return_value=(0, [])) as run_lftp,
-            patch.dict(servercopy.os.environ, {}, clear=True),
-        ):
-            code = servercopy.run_workflow(args, Path("/unused"), report)
-
-        self.assertEqual(code, 0)
-        discover.assert_called_once_with(
-            "/mock/lftp", source, "fake-password", report, "dry-run"
-        )
-        mirror_script = run_lftp.call_args.args[1]
-        self.assertLess(mirror_script.index("suffix=.S61"), mirror_script.index("suffix=.000"))
-        self.assertLess(mirror_script.index("suffix=.000"), mirror_script.index("suffix=.001"))
-        self.assertEqual(
-            mirror_script.count('"--dry-run"'),
-            len(servercopy.FIXED_SYNC_SUFFIXES) + 2,
-        )
-        messages = [call.args[0] for call in report.write.call_args_list if call.args]
-        self.assertFalse(any("skipping source" in message for message in messages))
-        self.assertFalse(any(message == "\nSkipped:" for message in messages))
-        self.assertIn("DONE: dry run completed for /tmp/servercopy-test", messages)
-
-    def test_missing_credential_skips_one_source_and_runs_the_others(self) -> None:
-        missing = rudics_source("s_m0056")
-        runnable = rudics_source("s_m0057")
-        args = servercopy.parse_args(["--dry-run", "--output", "/tmp/servercopy-test"])
-        report = MagicMock()
-
-        with (
-            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
-            patch.object(servercopy, "load_sources", return_value=[missing, runnable]),
-            patch.object(
-                servercopy,
-                "load_credentials",
-                return_value={runnable.login: "fake-password"},
-            ),
-            patch.object(
-                servercopy, "discover_remote_numbered_suffixes", return_value=()
-            ) as discover,
-            patch.object(servercopy, "run_lftp", return_value=(0, [])),
-            patch.dict(servercopy.os.environ, {}, clear=True),
-        ):
-            code = servercopy.run_workflow(args, Path("/unused"), report)
-
-        self.assertEqual(code, 0)
-        self.assertEqual(discover.call_count, 1)
-        self.assertEqual(discover.call_args.args[1], runnable)
-        report.write.assert_any_call(
-            "Warning: skipping source 's_m0056' (credentials not found)",
-            error=True,
-        )
-        report.write.assert_any_call("  s_m0056 (missing credentials)", error=True)
-
-    def test_multiple_missing_credentials_are_all_summarized(self) -> None:
-        missing = [rudics_source("s_m0055"), rudics_source("s_m0056")]
-        runnable = rudics_source("s_m0057")
-        args = servercopy.parse_args(["--dry-run", "--output", "/tmp/servercopy-test"])
-        report = MagicMock()
-
-        with (
-            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
-            patch.object(
-                servercopy, "load_sources", return_value=[*missing, runnable]
-            ),
-            patch.object(
-                servercopy,
-                "load_credentials",
-                return_value={runnable.login: "fake-password"},
-            ),
-            patch.object(
-                servercopy, "discover_remote_numbered_suffixes", return_value=()
-            ) as discover,
-            patch.object(servercopy, "run_lftp", return_value=(0, [])),
-            patch.dict(servercopy.os.environ, {}, clear=True),
-        ):
-            code = servercopy.run_workflow(args, Path("/unused"), report)
-
-        self.assertEqual(code, 0)
-        self.assertEqual(discover.call_count, 1)
-        for source in missing:
-            report.write.assert_any_call(
-                f"Warning: skipping source '{source.user}' (credentials not found)",
-                error=True,
-            )
-            report.write.assert_any_call(
-                f"  {source.user} (missing credentials)", error=True
-            )
-
-    def test_all_missing_credentials_exit_nonzero_without_running_sources(self) -> None:
-        sources = [rudics_source("s_m0055"), rudics_source("s_m0056")]
-        args = servercopy.parse_args(["--dry-run", "--output", "/tmp/servercopy-test"])
-        report = MagicMock()
-
-        with (
-            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
-            patch.object(servercopy, "load_sources", return_value=sources),
-            patch.object(servercopy, "load_credentials", return_value={}),
-            patch.object(servercopy, "discover_remote_numbered_suffixes") as discover,
             patch.object(servercopy, "run_lftp") as run_lftp,
             patch.dict(servercopy.os.environ, {}, clear=True),
         ):
-            code = servercopy.run_workflow(args, Path("/unused"), report)
+            status = servercopy.run_workflow(args, Path("/unused"), MagicMock())
 
-        self.assertEqual(code, 1)
-        discover.assert_not_called()
-        run_lftp.assert_not_called()
-        for source in sources:
-            report.write.assert_any_call(
-                f"  {source.user} (missing credentials)", error=True
-            )
-        report.write.assert_any_call(
-            "\nError: no runnable sources; all selected sources are missing credentials.",
-            error=True,
-        )
-
-    def test_check_performs_no_discovery_or_remote_execution(self) -> None:
-        source = rudics_source()
-        args = servercopy.parse_args(
-            ["--check", "--user", source.user, "--output", "/tmp/servercopy-check"]
-        )
-
-        with (
-            patch.object(servercopy.shutil, "which", return_value="/mock/lftp"),
-            patch.object(servercopy, "load_sources", return_value=[source]),
-            patch.object(
-                servercopy, "load_credentials", return_value={source.login: "fake-password"}
-            ),
-            patch.object(servercopy, "discover_remote_numbered_suffixes") as discover,
-            patch.object(servercopy, "run_lftp") as run_lftp,
-            patch.dict(servercopy.os.environ, {}, clear=True),
-        ):
-            code = servercopy.run_workflow(args, Path("/unused"), MagicMock())
-
-        self.assertEqual(code, 0)
-        discover.assert_not_called()
+        self.assertEqual(status, 0)
         run_lftp.assert_not_called()
 
 

@@ -58,9 +58,9 @@ lftp
 Then at the `lftp>` prompt:
 
 ```text
-set ftp:ssl-force true
-set ftp:ssl-protect-data true
-set ssl:check-hostname yes
+set ftp:ssl-force yes
+set ftp:ssl-protect-data yes
+set ftp:ssl-protect-list yes
 
 open -u automaid ftp://taal.unice.fr:21
 ```
@@ -94,7 +94,8 @@ exit
   - Server availability
 
 - A successful login does **not** guarantee that a `mirror` operation will be
-  fast or complete; large directory scans may still take considerable time.
+  fast or complete; the remote listing and comparison may be quiet for
+  approximately ten minutes even when no files need transfer.
 
 - These commands are intended only for diagnostics and interactive inspection.
   Manual synchronization should be performed with `servercopy`; scheduled

@@ -48,6 +48,9 @@ Authenticate and preview remote mirror operations without transferring files:
 ./servercopy --dry-run
 ```
 
+Dry-run mode does not create local destinations; each selected
+`<output>/<logical_user>/` directory must already exist.
+
 Run a normal synchronization:
 
 ```sh
@@ -117,17 +120,33 @@ messages.
 
 ## Synchronization behavior
 
-The authoritative fixed suffixes are:
+Every configured source uses the same transfer workflow:
 
 ```text
-.MER .LOG .BIN .cmd .out .vit .S41 .S61
+connect
+cd <configured remote directory>
+lcd <output>/<logical_user>
+mirror
 ```
 
-Before mirroring, `servercopy` lists the configured remote root and discovers
-any contiguous three-digit suffix sequence beginning with `.000`. Discovered
-suffixes are appended to the fixed mirror plan. Each suffix uses the proven
-suffix-specific `lftp mirror` command shape; files outside the plan are not
-selected.
+The implementation runs one plain whole-tree `mirror` per source. Protocol,
+host, login, remote directory, and local destination are configuration; the
+transfer algorithm does not vary for Kobe, ESO, RUDICS, or other endpoints.
+Plain `mirror` does not delete remote or local files, reverse the transfer, or
+force overwrites.
+
+Whole-tree mirroring replaced suffix-filtered mirroring for every supported
+endpoint. It deliberately uses the smallest practical subset of `lftp`
+features validated on the production environments, including legacy `lftp
+4.4.8` on Frisius. A full remote listing and comparison can take approximately
+ten minutes even when no files need transfer. This quiet interval is expected,
+not evidence that the process has hung.
+
+Native `lftp` progress may update one terminal line with carriage returns.
+While `lftp` remains active, `servercopy` emits a periodic heartbeat. The
+heartbeat means only that the child process is alive; it does not assert that
+bytes are moving or that remote comparison is advancing. Output silence never
+causes `servercopy` to terminate an otherwise live `lftp` process.
 
 Normal runs append one row per attempted logical user to:
 
@@ -186,7 +205,7 @@ operational version increment.
 - [`docs/servercopy_sources_todo.md`](docs/servercopy_sources_todo.md):
   unresolved source-integration work.
 - [`docs/servercopy_complete_mirror_experiment.md`](docs/servercopy_complete_mirror_experiment.md):
-  evidence for retaining suffix-specific mirrors.
+  whole-tree mirror design rationale and production evidence.
 
 Retired implementations under `attic/` are historical reference only and are
 not maintained or tested.
