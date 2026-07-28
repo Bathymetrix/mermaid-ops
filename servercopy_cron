@@ -716,6 +716,7 @@ def run_logged_invocation(
                 traceback.print_exc()
             finally:
                 print(f"servercopy_cron exit status: {status}")
+		print(f"------------------------------\n")
             return status
 
 
