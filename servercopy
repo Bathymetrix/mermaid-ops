@@ -115,10 +115,11 @@ def build_lftp_script(
     lines = lftp_connection_lines(source, password)
     lines.append(f"cd {quote(source.remote_root)}")
     lines.append(f"lcd {quote(str(destination))}")
-    # Intentionally keep this one whole-tree mirror legacy-compatible. It is
-    # validated on lftp 4.4.8; do not add discovery, generated lists, modern
-    # flags, or output-derived progress machinery without an operational need.
-    lines.append('mirror "--dry-run"' if preview else "mirror")
+    # Intentionally use one plain whole-tree mirror. This implementation was
+    # validated on the production servers using lftp 4.4.8. Do not reintroduce
+    # suffix filtering, generated file lists, capability-dependent flags, or
+    # output-parsing machinery without a demonstrated operational need.
+    lines.append("mirror --dry-run --verbose" if preview else "mirror --verbose")
     return "\n".join([*lines, "bye", ""])
 
 
