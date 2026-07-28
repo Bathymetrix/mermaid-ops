@@ -97,6 +97,16 @@ exit
   fast or complete; the remote listing and comparison may be quiet for
   approximately ten minutes even when no files need transfer.
 
+- `servercopy` mirrors the complete readable tree beneath the configured
+  remote root for RUDICS, ESO, and Kobe alike. It does not filter by scientific
+  filename suffix, so shell files, account configuration, scripts, tools,
+  histories, and other readable account content may appear locally.
+
+- A path shown by `ls` or `cls` is not necessarily readable. Server-side
+  ownership or permissions may cause `mirror: Access failed: Permission
+  denied`; the path then remains absent locally and `lftp` may exit nonzero.
+  Diagnostic sessions must not change remote permissions.
+
 - These commands are intended only for diagnostics and interactive inspection.
   Manual synchronization should be performed with `servercopy`; scheduled
   synchronization should use `servercopy_cron`.

@@ -129,14 +129,28 @@ lcd <output>/<logical_user>
 mirror
 ```
 
-The implementation runs one plain whole-tree `mirror` per source. Protocol,
-host, login, remote directory, and local destination are configuration; the
-transfer algorithm does not vary for Kobe, ESO, RUDICS, or other endpoints.
-Plain `mirror` does not delete remote or local files, reverse the transfer, or
-force overwrites.
+The implementation runs one whole-tree `lftp mirror` per configured source.
+Protocol, host, credentials, remote root, and local destination are
+configuration; the transfer algorithm does not vary for RUDICS SFTP accounts,
+ESO FTPS, Kobe FTPS, or other endpoints. The mirror does not delete remote or
+local files, reverse the transfer, or force overwrites.
 
 Whole-tree mirroring replaced suffix-filtered mirroring for every supported
-endpoint. It deliberately uses the smallest practical subset of `lftp`
+endpoint. Downloads are no longer restricted to `.MER`, `.LOG`, `.BIN`, `.cmd`,
+`.out`, `.vit`, `.S41`, `.S61`, or any other filename allowlist. Shell startup
+files, account configuration, scripts, tools, histories, and other remotely
+visible content may therefore appear beneath the logical-user destination.
+That broader scope is intentional.
+
+Here, **whole-tree mirror** means the complete remote tree that the
+authenticated account is allowed to read. A directory listing may expose paths
+that server-side ownership or permissions prevent `lftp` from downloading.
+Those paths remain absent locally, and an access failure is reported through
+the real `lftp` exit status; it is not evidence of suffix filtering. See the
+[whole-tree design note](docs/servercopy_complete_mirror_experiment.md) for the
+detailed permission and maintainer policy.
+
+The implementation deliberately uses the smallest practical subset of `lftp`
 features validated on the production environments, including legacy `lftp
 4.4.8` on Frisius. A full remote listing and comparison can take approximately
 ten minutes even when no files need transfer. This quiet interval is expected,
@@ -215,7 +229,10 @@ not maintained or tested.
 - Review source and destination mappings before a first normal run.
 - Treat `--dry-run` as an authenticated remote operation.
 - Normal runs may modify files beneath `<output>/<logical_user>/`.
+- Whole-tree scope includes readable account files that are not scientific
+  data.
 - Remote deletions do not delete local files.
+- `servercopy` never changes remote ownership or permissions.
 - Do not expose credentials or the Healthchecks.io UUID.
 - Do not run `servercopy` manually while the scheduled wrapper may be active.
 - `servercopy_cron` commits only after successful synchronization and never

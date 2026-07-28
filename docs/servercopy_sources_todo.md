@@ -9,8 +9,9 @@ change unless new evidence changes the established mirror policy.
 - [ ] Follow up with Seb and Lionel at GeoAzur to expose all applicable TAAL
   files, especially `*.S61` and `*.[0-9][0-9][0-9]`, in the `eso/` and
   `kobeuni/` subtrees.
-  - `servercopy` mirrors the complete configured remote tree, so newly exposed
-    classes require no transfer-policy change.
+  - `servercopy` mirrors the complete readable configured remote tree, so newly
+    exposed classes require no transfer-policy change once the account can read
+    them.
   - The live Kobe mirror currently has no `.S61` files, while its historical
     archive has 177 `.S61` and 300 numbered files (`.000` through `.002`).
   - Complete this item after an authenticated preview confirms the newly
@@ -26,8 +27,11 @@ change unless new evidence changes the established mirror policy.
   - Each destination contains the same 19 retained shell, configuration,
     monitoring, and tool files, but no canonical data files (`MER`, `LOG`,
     `BIN`, `cmd`, `out`, `vit`, `S41`, `S61`, or a numbered suffix).
+    These non-data files are expected whole-tree content, not evidence of an
+    endpoint-specific selection policy.
   - A successful whole-tree mirror containing no canonical data does not
-    establish that data exists.
+    establish that data exists. It establishes only that the account's
+    readable tree was mirrored without an `lftp` failure.
   - Determine whether each account was provisioned but unused, whether a
     broader account carries its data, or whether another source or remote root
     is authoritative. Record that no data is expected or configure the actual

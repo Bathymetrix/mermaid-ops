@@ -243,6 +243,19 @@ process so output remains prompt while the long-running synchronization is in
 progress. Production cron does not activate Conda; its explicit Miniforge
 interpreter therefore remains authoritative for both programs.
 
+For each configured source, `servercopy` runs the same whole-tree `lftp mirror`
+after selecting that source's configured remote root and local destination.
+RUDICS SFTP, ESO FTPS, and Kobe FTPS differ only in connection and path
+configuration. There is no suffix allowlist: readable shell files, account
+configuration, scripts, tools, histories, and other remotely visible content
+are intentionally within scope.
+
+Whole-tree means the complete remote tree that the authenticated account is
+allowed to read. A path can be visible in a remote listing but unreadable
+because of server-side ownership or permissions. Such a path remains absent
+locally. If the access failure makes `lftp` return nonzero, the source and
+overall `servercopy` run are failures even if other files transferred.
+
 If `servercopy` returns nonzero, the wrapper:
 
 - attempts one Healthchecks.io failure ping;
@@ -299,7 +312,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=1.8.2 servercopy_cron=2.4.2]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.0.0 servercopy_cron=2.4.2]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
@@ -408,8 +421,25 @@ commit may already exist.
 
 Use the timestamped workflow log and the nested `servercopy` diagnostics to
 identify the logical user and failing stage. Partial downloads remain
-uncommitted. Correct the remote, network, or credential problem, inspect and
-commit any valid downloaded files as described above, and rerun manually.
+uncommitted.
+
+A diagnostic such as:
+
+```text
+mirror: Access failed: Permission denied (.buoy_monitoring.sh.nohup.20260704122043)
+```
+
+means the authenticated account could list a path that the remote server would
+not allow it to read. It does not indicate that suffix filtering is active.
+`servercopy` does not and must not alter remote permissions, so the inaccessible
+path remains absent locally. Investigate repeated or operationally important
+cases with the server owner; do not add source-specific exclusions merely to
+hide the failure.
+
+Correct the remote permission, network, or credential problem when appropriate,
+inspect and commit any valid downloaded files as described above, and rerun
+manually. A nonzero `lftp` status remains a failed run even when most of the
+complete readable tree was mirrored successfully.
 
 ### Git failure
 

@@ -50,6 +50,15 @@ production environments. Do not substitute newer settings or mirror flags
 without first demonstrating an operational need on every supported deployment
 target.
 
+Each configured RUDICS SFTP, ESO FTPS, and Kobe FTPS source uses the same
+whole-tree transfer algorithm: connect, select the configured remote root and
+logical-user destination, and run one `lftp mirror`. Only connection and path
+configuration differ. The mirror intentionally includes all content the
+authenticated account can read, not only recognized scientific filename
+suffixes. Plan storage and Git review accordingly: readable shell files,
+configuration, scripts, tools, histories, and monitoring artifacts may appear
+in the servers repository.
+
 Install any other missing system commands through the Frisius administrator or
 its supported operating-system package manager. The repository itself has no
 third-party Python dependencies.
@@ -221,6 +230,13 @@ The initial remote listing and comparison may be quiet for approximately ten
 minutes, including when no new files exist. That delay is expected. A
 `servercopy` heartbeat during this phase means only that the `lftp` child is
 still alive.
+
+Whole-tree scope does not override remote permissions. A listed path may still
+fail with `mirror: Access failed: Permission denied`; it then remains absent
+locally and may cause `lftp` and the monitored workflow to return nonzero.
+Investigate repeated or important access errors with the remote server owner.
+Do not change remote permissions from `servercopy` or add local file-selection
+exceptions merely to hide the error.
 
 ## Install the production crontab
 
