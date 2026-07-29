@@ -8,7 +8,7 @@ When prompted, enter the password interactively.
 
 ---
 
-# RUDICS (CLS)
+## RUDICS (CLS)
 
 Host:
 ```
@@ -37,7 +37,7 @@ exit
 
 ---
 
-# TAAL
+## TAAL
 
 Host:
 ```
@@ -85,7 +85,7 @@ exit
 
 ---
 
-# Notes
+## Notes
 
 - Successful login confirms:
   - DNS resolution
@@ -111,4 +111,3 @@ exit
 - These commands are intended only for diagnostics and interactive inspection.
   Manual synchronization should be performed with `servercopy`; scheduled
   synchronization should use `servercopy_cron`.
-  

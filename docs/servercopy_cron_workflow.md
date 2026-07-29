@@ -314,7 +314,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.0.1 servercopy_cron=2.4.2]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.0.2 servercopy_cron=2.4.2]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the

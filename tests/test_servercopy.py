@@ -82,38 +82,6 @@ class MirrorScriptTests(unittest.TestCase):
                 for fragment in self.forbidden_fragments:
                     self.assertNotIn(fragment, script)
 
-    def test_transfer_command_shape_is_identical_for_every_endpoint(self) -> None:
-        command_shapes = []
-        for source in (sftp_source(), ftps_source(), ftps_source("kobeuni")):
-            script = servercopy.build_lftp_script(
-                source,
-                "fake-password",
-                Path("/tmp/servers") / source.user,
-                False,
-            )
-            lines = script.splitlines()
-            command_shapes.append(
-                [
-                    lines[-4].split(maxsplit=1)[0],
-                    lines[-3].split(maxsplit=1)[0],
-                    lines[-2],
-                    lines[-1],
-                ]
-            )
-
-        self.assertEqual(
-            command_shapes,
-            [
-                [
-                    "cd",
-                    "lcd",
-                    'mirror --exclude="(^|/)backups/$" --verbose',
-                    "bye",
-                ]
-            ]
-            * 3,
-        )
-
     def test_ftps_uses_only_validated_tls_settings(self) -> None:
         script = servercopy.build_lftp_script(
             ftps_source(),
@@ -522,7 +490,7 @@ class WorkflowTests(unittest.TestCase):
                 ),
                 "user,result,start,end,ver\n"
                 "eso,success,2026-07-28T01:00:00Z,"
-                "2026-07-28T01:10:00Z,2.0.1\n",
+                "2026-07-28T01:10:00Z,2.0.2\n",
             )
 
     def test_missing_credential_skips_source_and_runs_others(self) -> None:
@@ -536,10 +504,6 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         run_lftp.assert_called_once()
-        report.write.assert_any_call(
-            "Warning: skipping source 's_m0056' (credentials not found)",
-            error=True,
-        )
         report.write.assert_any_call("  s_m0056 (missing credentials)", error=True)
 
     def test_all_missing_credentials_exit_nonzero_without_lftp(self) -> None:

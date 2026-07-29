@@ -84,6 +84,9 @@ Non-secret source definitions are stored in:
 data/servercopy_sources.csv
 ```
 
+This registry is authoritative for each source's protocol, host, port, and
+remote root.
+
 The columns are:
 
 ```csv
@@ -223,9 +226,6 @@ operational version increment.
   unresolved source-integration work.
 - [`docs/servercopy_complete_mirror_experiment.md`](docs/servercopy_complete_mirror_experiment.md):
   whole-tree mirror design rationale and production evidence.
-
-Retired implementations under `attic/` are historical reference only and are
-not maintained or tested.
 
 ## Safety
 

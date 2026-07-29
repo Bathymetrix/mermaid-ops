@@ -27,7 +27,7 @@ if sys.version_info < MIN_VERSION:
         f"(found {sys.version_info.major}.{sys.version_info.minor})."
     )
 
-SERVERCOPY_VERSION = "2.0.1"
+SERVERCOPY_VERSION = "2.0.2"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
@@ -126,7 +126,9 @@ def build_lftp_script(
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Mirror configured MERMAID server sources.")
+    parser = argparse.ArgumentParser(
+        description="Mirror configured remote trees except directories named 'backups'."
+    )
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("-c", "--check", action="store_true", help="validate locally only")
     modes.add_argument("--dry-run", action="store_true", help="preview remote mirrors")
@@ -365,14 +367,6 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
     skipped: list[Source] = []
     try:
         sources = load_sources(sources_path)
-        override = os.environ.get("SFTP_PORT")
-        if override:
-            if not override.isdecimal() or not 1 <= int(override) <= 65535:
-                raise ConfigError("SFTP_PORT must be numeric and between 1 and 65535")
-            sources = [
-                source._replace(port=int(override)) if source.protocol == "sftp" else source
-                for source in sources
-            ]
         requested = requested_users(args.user)
         configured = {source.user for source in sources}
         missing_users = [user for user in requested or [] if user not in configured]
@@ -383,11 +377,6 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         credentials = load_credentials(credentials_path)
         skipped = [source for source in sources if source.login not in credentials]
         sources = [source for source in sources if source.login in credentials]
-        for source in skipped:
-            report.write(
-                f"Warning: skipping source '{source.user}' (credentials not found)",
-                error=True,
-            )
         if sources and not args.check and not args.dry_run:
             prepare_ledger(ledger)
     except (ConfigError, OSError) as error:
@@ -395,16 +384,8 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         return 1
 
     failures: dict[str, list[str]] = {}
-    warnings: list[str] = []
-
     def fail(user: str, detail: str) -> None:
-        lines: list[str] = []
-        for line in detail.splitlines():
-            if line.lower().startswith("warning:"):
-                warnings.append(line)
-            elif line:
-                lines.append(line)
-        failures[user] = lines
+        failures[user] = [line for line in detail.splitlines() if line]
 
     for source in sources:
         remote = remote_url(source)
@@ -481,12 +462,11 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
         report.write()
 
     report.write("##########################################################")
-    warnings.extend(
-        f"Warning: requested user not found in source registry: {user}"
-        for user in missing_users
-    )
-    for warning in warnings:
-        report.write(warning, error=True)
+    for user in missing_users:
+        report.write(
+            f"Warning: requested user not found in source registry: {user}",
+            error=True,
+        )
     if skipped:
         report.write("\nSkipped:", error=True)
         for source in skipped:
@@ -511,7 +491,7 @@ def run_workflow(args: argparse.Namespace, root: Path, report: Reporter) -> int:
     elif args.dry_run:
         report.write(f"DONE: dry run completed for {server_root}")
     else:
-        report.write(f"DONE: synced all accounts to {server_root}")
+        report.write(f"DONE: synchronization completed for {server_root}")
     report.write("##########################################################")
     return 0
 
