@@ -245,11 +245,12 @@ interpreter therefore remains authoritative for both programs.
 
 For each configured source, `servercopy` runs one `lftp mirror` after selecting
 that source's configured remote root and local destination. The single mirror
-command includes `.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`,
-`.S61`, and exactly three-digit suffixes from `.000` through `.999`. It does
-not recurse, so only matching files located directly in the configured remote
-root are eligible and no subdirectories are traversed. RUDICS SFTP, ESO FTPS,
-and Kobe FTPS differ only in connection and path configuration.
+command uses multiple `--include-glob` filters for `.MER`, `.LOG`, `.BIN`,
+`.cmd`, `.out`, `.vit`, `.S41`, `.S61`, and exactly three-digit suffixes from
+`.000` through `.999`. It also uses `--no-recursion`, so only approved files
+located directly in the configured remote root are synchronized and no
+subdirectory is traversed. RUDICS SFTP, ESO FTPS, and Kobe FTPS differ only in
+connection and path configuration.
 
 An eligible path can still be unreadable because of server-side ownership or
 permissions. Such a path remains absent locally. If the access failure makes
@@ -314,13 +315,13 @@ no empty commit. Otherwise a successful synchronization creates a commit such
 as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.1 servercopy_cron=2.5.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.5.0]
 ```
 
 A failed synchronization that produced changes instead creates:
 
 ```text
-servercopy [cron partial]: 2026-07-23T22:30:00Z [servercopy=2.2.1 servercopy_cron=2.5.0]
+servercopy [cron partial]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.5.0]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the

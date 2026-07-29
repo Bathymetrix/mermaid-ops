@@ -132,14 +132,14 @@ lcd <output>/<logical_user>
 mirror
 ```
 
-The implementation runs one suffix-filtered `lftp mirror` per configured
-source. That single command includes files ending in `.MER`, `.LOG`, `.BIN`,
-`.cmd`, `.out`, `.vit`, `.S41`, `.S61`, or exactly three decimal digits from
-`.000` through `.999`. Mirroring is non-recursive: only matching files located
-directly in the configured remote root are eligible, and no remote
-subdirectories are traversed. Numbered suffixes are matched directly with
-`*.[0-9][0-9][0-9]`; no preliminary remote listing or suffix discovery is
-performed.
+The implementation generates exactly one `lftp mirror` command per configured
+source. That command uses multiple `--include-glob` filters to select the
+approved file types: `.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`,
+`.S61`, and exactly three decimal digits from `.000` through `.999`. It also
+uses `--no-recursion`, so only approved files located directly in the
+configured remote root are synchronized; no remote subdirectory is traversed.
+The numbered family is matched directly with `*.[0-9][0-9][0-9]` as one of the
+include filters.
 
 Protocol, host, credentials, remote root, and local destination are
 configuration; the mirror construction does not vary for RUDICS SFTP accounts,
@@ -223,7 +223,8 @@ operational version increment.
 - Review source and destination mappings before a first normal run.
 - Treat `--dry-run` as an authenticated remote operation.
 - Normal runs may modify files beneath `<output>/<logical_user>/`.
-- Only top-level files matching the documented suffix allowlist are selected.
+- Only top-level files matching the documented include-glob allowlist are
+  selected.
 - Remote subdirectories are not traversed.
 - Remote deletions do not delete local files.
 - `servercopy` never changes remote ownership or permissions.

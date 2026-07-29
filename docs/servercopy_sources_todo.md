@@ -1,16 +1,17 @@
 # Unresolved Server Source Work
 
-The configured suffix-filtered synchronization workflow is operational. Only
-the following source-level questions remain; neither requires a `servercopy`
-code change unless new evidence changes the established mirror policy.
+The configured single-mirror synchronization workflow is operational. Only the
+following source-level questions remain; neither requires a `servercopy` code
+change unless new evidence changes the established mirror policy.
 
 ## TAAL file exposure
 
 - [ ] Follow up with Seb and Lionel at GeoAzur to expose all applicable TAAL
   files, especially `*.S61` and `*.[0-9][0-9][0-9]`, in the `eso/` and
   `kobeuni/` subtrees.
-  - `servercopy` includes both classes in its suffix allowlist, so newly exposed
-    files require no transfer-policy change once the account can read them.
+  - `servercopy` includes both classes in its approved filename filters, so
+    newly exposed files require no transfer-policy change once the account can
+    read them.
   - The live Kobe mirror currently has no `.S61` files, while its historical
     archive has 177 `.S61` and 300 numbered files (`.000` through `.002`).
   - Complete this item after an authenticated preview confirms the newly
@@ -27,7 +28,7 @@ code change unless new evidence changes the established mirror policy.
     configuration, monitoring, and tool files from earlier whole-tree runs,
     but no canonical data files (`MER`, `LOG`, `BIN`, `cmd`, `out`, `vit`,
     `S41`, `S61`, or a numbered suffix).
-  - A successful suffix-filtered mirror containing no canonical data does not
+  - A successful filtered mirror containing no canonical data does not
     establish that data exists. It establishes only that no eligible file
     failed to mirror.
   - Determine whether each account was provisioned but unused, whether a

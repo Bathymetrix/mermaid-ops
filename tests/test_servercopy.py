@@ -43,49 +43,27 @@ def sftp_source(user: str = "s_m0057") -> servercopy.Source:
 
 
 class MirrorScriptTests(unittest.TestCase):
-    forbidden_fragments = (
-        "--file",
-        "--target-directory",
-        "--delete",
-        "--exclude",
-        "--overwrite",
-        "xfer:timeout",
-        "sftp:auto-confirm",
-        "cls ",
-        "find ",
-        "glob ",
-        "ls ",
-        "suffix=",
-    )
-
     @staticmethod
     def mirror_lines(script: str) -> list[str]:
         return [line for line in script.splitlines() if line.startswith("mirror ")]
 
-    def assert_include_filters(self, mirror: str) -> None:
-        self.assertEqual(len(servercopy.MIRROR_INCLUDE_GLOBS), 9)
-        for pattern in servercopy.MIRROR_INCLUDE_GLOBS:
-            self.assertEqual(mirror.count(f"--include-glob={pattern}"), 1)
-
-    def assert_mirror_contract(self, mirror: str) -> None:
-        self.assertEqual(mirror.count("--no-recursion"), 1)
-        self.assert_include_filters(mirror)
-        filters = [
-            option
-            for option in mirror.split()
-            if option.startswith(("--include", "--exclude"))
-        ]
-        self.assertTrue(filters[0].startswith("--include-glob="))
-        self.assertFalse(any(option.startswith("--exclude") for option in filters))
-        for option in (
+    @staticmethod
+    def expected_mirror(*, preview: bool = False) -> str:
+        options = [
+            "--no-recursion",
+            *(
+                f"--include-glob={pattern}"
+                for pattern in servercopy.MIRROR_INCLUDE_GLOBS
+            ),
             "--continue",
             "--no-perms",
             "--parallel=4",
+            *(["--dry-run"] if preview else []),
             "--verbose",
-        ):
-            self.assertEqual(mirror.count(option), 1)
+        ]
+        return f"mirror {' '.join(options)}"
 
-    def test_each_protocol_uses_one_suffix_filtered_mirror(self) -> None:
+    def test_each_protocol_uses_one_nonrecursive_filtered_mirror(self) -> None:
         for source in (sftp_source(), ftps_source()):
             with self.subTest(protocol=source.protocol):
                 destination = Path("/tmp/servers") / source.user
@@ -100,14 +78,60 @@ class MirrorScriptTests(unittest.TestCase):
 
                 self.assertEqual(len(mirrors), 1)
                 mirror = mirrors[0]
-                self.assert_mirror_contract(mirror)
-                self.assertEqual(lines[-4], f'cd "{source.remote_root}"')
-                self.assertEqual(lines[-3], f'lcd "{destination}"')
-                self.assertEqual(lines[-2], mirror)
-                self.assertEqual(lines[-1], "bye")
-                self.assertEqual(script.count("open -u "), 1)
-                for fragment in self.forbidden_fragments:
-                    self.assertNotIn(fragment, script)
+                self.assertEqual(mirror, self.expected_mirror())
+                self.assertEqual(
+                    lines,
+                    [
+                        *servercopy.lftp_connection_lines(
+                            source,
+                            "fake-password",
+                        ),
+                        f'cd "{source.remote_root}"',
+                        f'lcd "{destination}"',
+                        mirror,
+                        "bye",
+                    ],
+                )
+
+    def test_approved_include_filters_are_exact(self) -> None:
+        self.assertEqual(
+            servercopy.MIRROR_INCLUDE_GLOBS,
+            (
+                "*.MER",
+                "*.LOG",
+                "*.BIN",
+                "*.cmd",
+                "*.out",
+                "*.vit",
+                "*.S41",
+                "*.S61",
+                "*.[0-9][0-9][0-9]",
+            ),
+        )
+
+    def test_all_approved_file_types_have_include_filters(self) -> None:
+        filenames = (
+            "sample.MER",
+            "sample.LOG",
+            "sample.BIN",
+            "sample.cmd",
+            "sample.out",
+            "sample.vit",
+            "sample.S41",
+            "sample.S61",
+            "sample.000",
+            "sample.057",
+            "sample.999",
+        )
+
+        for filename in filenames:
+            with self.subTest(filename=filename):
+                self.assertTrue(
+                    any(
+                        fnmatchcase(filename, pattern)
+                        for pattern in servercopy.MIRROR_INCLUDE_GLOBS
+                    )
+                )
 
     def test_unmatched_top_level_files_are_not_eligible(self) -> None:
         for filename in (
@@ -178,16 +202,10 @@ class MirrorScriptTests(unittest.TestCase):
         mirrors = self.mirror_lines(script)
 
         self.assertEqual(len(mirrors), 1)
-        self.assertEqual(
-            mirrors[0],
-            normal_mirror.replace(" --verbose", " --dry-run --verbose"),
-        )
-        self.assertEqual(mirrors[0].count("--dry-run"), 1)
-        self.assert_mirror_contract(mirrors[0])
-        for fragment in self.forbidden_fragments:
-            self.assertNotIn(fragment, script)
+        self.assertEqual(normal_mirror, self.expected_mirror())
+        self.assertEqual(mirrors[0], self.expected_mirror(preview=True))
 
-    def test_three_digit_glob_is_included_without_discovery_commands(self) -> None:
+    def test_three_digit_family_uses_one_static_include_filter(self) -> None:
         script = servercopy.build_lftp_script(
             sftp_source(),
             "fake-password",
@@ -197,8 +215,6 @@ class MirrorScriptTests(unittest.TestCase):
         mirror = self.mirror_lines(script)[0]
 
         self.assertEqual(mirror.count("--include-glob=*.[0-9][0-9][0-9]"), 1)
-        self.assertFalse(hasattr(servercopy, "build_discovery_lftp_script"))
-        self.assertFalse(hasattr(servercopy, "parse_numbered_suffixes"))
 
 
 class LftpRunnerTests(unittest.TestCase):
@@ -486,12 +502,10 @@ class WorkflowTests(unittest.TestCase):
             script = invocation.args[1]
             mirrors = MirrorScriptTests.mirror_lines(script)
             self.assertEqual(len(mirrors), 1)
-            self.assertIn("--no-recursion", mirrors[0])
-            self.assertNotIn("--exclude", mirrors[0])
-            for option in ("--continue", "--no-perms", "--parallel=4"):
-                self.assertIn(option, mirrors[0])
-            for pattern in servercopy.MIRROR_INCLUDE_GLOBS:
-                self.assertEqual(mirrors[0].count(f"--include-glob={pattern}"), 1)
+            self.assertEqual(
+                mirrors[0],
+                MirrorScriptTests.expected_mirror(preview=True),
+            )
             self.assertIn(f'cd "{source.remote_root}"', script)
             lcd_line = next(
                 line for line in script.splitlines() if line.startswith("lcd ")
@@ -552,13 +566,7 @@ class WorkflowTests(unittest.TestCase):
             script = run_lftp.call_args.args[1]
             mirrors = MirrorScriptTests.mirror_lines(script)
             self.assertEqual(len(mirrors), 1)
-            self.assertIn("--no-recursion", mirrors[0])
-            self.assertNotIn("--exclude", mirrors[0])
-            for pattern in servercopy.MIRROR_INCLUDE_GLOBS:
-                self.assertEqual(
-                    mirrors[0].count(f"--include-glob={pattern}"),
-                    1,
-                )
+            self.assertEqual(mirrors[0], MirrorScriptTests.expected_mirror())
             self.assertTrue((output / source.user).is_dir())
             self.assertEqual(
                 (output / "_runs" / "servercopy_runs.csv").read_text(
@@ -566,7 +574,7 @@ class WorkflowTests(unittest.TestCase):
                 ),
                 "user,result,start,end,ver\n"
                 "eso,success,2026-07-28T01:00:00Z,"
-                "2026-07-28T01:10:00Z,2.2.1\n",
+                "2026-07-28T01:10:00Z,2.2.2\n",
             )
 
     def test_missing_credential_skips_source_and_runs_others(self) -> None:

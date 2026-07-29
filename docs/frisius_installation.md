@@ -52,12 +52,12 @@ target.
 
 Each configured RUDICS SFTP, ESO FTPS, and Kobe FTPS source uses the same
 transfer algorithm: connect, select the configured remote root and
-logical-user destination, and run one suffix-filtered `lftp mirror`. The
-command includes `.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`,
-`.S61`, and exactly three-digit suffixes from `.000` through `.999`. It uses
-`--no-recursion`, so only matching files directly in the configured remote root
-are eligible and directories such as `o/`, `logs/`, `tools/`, and `backups/`
-are not traversed. Only connection and path configuration differ.
+logical-user destination, and run exactly one `lftp mirror` command. The
+command uses multiple `--include-glob` filters for `.MER`, `.LOG`, `.BIN`,
+`.cmd`, `.out`, `.vit`, `.S41`, `.S61`, and exactly three-digit suffixes from
+`.000` through `.999`. It uses `--no-recursion`, so only approved files
+directly in the configured remote root are synchronized and no subdirectory is
+traversed. Only connection and path configuration differ.
 
 Install any other missing system commands through the Frisius administrator or
 its supported operating-system package manager. The repository itself has no
@@ -231,7 +231,7 @@ minutes, including when no new files exist. That delay is expected. A
 `servercopy` heartbeat during this phase means only that the `lftp` child is
 still alive.
 
-Suffix selection does not override remote permissions. An eligible top-level
+The include filters do not override remote permissions. An eligible top-level
 file may still fail with `mirror: Access failed: Permission denied`; it then
 remains absent locally and may cause `lftp` and the monitored workflow to
 return nonzero. Investigate repeated or important access errors with the remote

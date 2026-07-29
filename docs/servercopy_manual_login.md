@@ -97,11 +97,11 @@ exit
   fast or complete; the remote listing and comparison may be quiet for
   approximately ten minutes even when no files need transfer.
 
-- `servercopy` runs one suffix-filtered mirror beneath the configured remote
-  root for RUDICS, ESO, and Kobe alike. It selects `.MER`, `.LOG`, `.BIN`,
-  `.cmd`, `.out`, `.vit`, `.S41`, `.S61`, and exactly three-digit suffixes.
-  Mirroring is non-recursive, so only matching files located directly in that
-  root are eligible.
+- `servercopy` generates one `lftp mirror` command per configured source for
+  RUDICS, ESO, and Kobe alike. Multiple `--include-glob` filters select `.MER`,
+  `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`, `.S61`, and exactly
+  three-digit suffixes. The command uses `--no-recursion`, so only approved
+  files located directly in the configured remote root are synchronized.
 
 - A path shown by `ls` or `cls` is not necessarily readable. Server-side
   ownership or permissions may cause `mirror: Access failed: Permission

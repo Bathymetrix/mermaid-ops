@@ -3,14 +3,14 @@
 ## Status
 
 This document records the superseded whole-tree experiment and its production
-evidence. Current `servercopy` behavior uses one suffix-filtered `lftp mirror`
-per configured source. The command includes `.MER`, `.LOG`, `.BIN`, `.cmd`,
-`.out`, `.vit`, `.S41`, `.S61`, and exactly three-digit suffixes from `.000`
-through `.999`. It does not recurse into remote subdirectories.
+evidence. Current `servercopy` behavior generates one `lftp mirror` command per
+configured source. Multiple `--include-glob` filters select `.MER`, `.LOG`,
+`.BIN`, `.cmd`, `.out`, `.vit`, `.S41`, `.S61`, and exactly three-digit
+suffixes from `.000` through `.999`. The command uses `--no-recursion`, so only
+approved files in the configured remote root are synchronized.
 
-The current implementation expresses the numbered family directly as
-`*.[0-9][0-9][0-9]`. It performs no preliminary remote listing, suffix
-discovery, or suffix-by-suffix mirror passes.
+The numbered family is expressed directly as `*.[0-9][0-9][0-9]` in that
+single command.
 
 ## Transfer model
 
@@ -84,10 +84,10 @@ Comparable delays have occurred on macOS and on runs that ultimately found no
 new files. A long quiet comparison phase is therefore normal and should not be
 "optimized" without evidence of an actual operational problem.
 
-The earlier suffix-filtered design added discovery and multi-command
-complexity. The restored design avoids those mechanisms: it combines all
-include globs in one mirror command and matches the entire numbered family
-directly.
+The pre-experiment suffix-by-suffix design added remote discovery and
+multi-command complexity. The current design avoids those mechanisms: it
+combines all include globs in one non-recursive mirror command and matches the
+entire numbered family directly.
 
 ## Output and heartbeat
 

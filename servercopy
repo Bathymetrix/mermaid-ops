@@ -27,7 +27,7 @@ if sys.version_info < MIN_VERSION:
         f"(found {sys.version_info.major}.{sys.version_info.minor})."
     )
 
-SERVERCOPY_VERSION = "2.2.1"
+SERVERCOPY_VERSION = "2.2.2"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
@@ -143,8 +143,9 @@ def build_lftp_script(
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Mirror allowed file suffixes directly from configured remote roots "
-            "without recursing into subdirectories."
+            "Mirror approved file types directly from configured remote roots "
+            "with one lftp mirror command using multiple --include-glob filters "
+            "and --no-recursion."
         )
     )
     modes = parser.add_mutually_exclusive_group()
