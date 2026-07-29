@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and monitor servercopy for cron, preserving completed downloads in Git."""
+"""Run and monitor servercopy for cron with optional Git synchronization."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from http.client import HTTPException
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import socket
 import subprocess
@@ -31,10 +32,24 @@ if sys.version_info < MIN_VERSION:
     )
 
 
-SERVERCOPY_CRON_VERSION = "2.5.0"
+SERVERCOPY_CRON_VERSION = "2.6.0"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
 FAILURE_EXCERPT_CHARACTERS = 2_000
+
+EXIT_SUCCESS = 0
+EXIT_WRAPPER_FAILURE = 1
+EXIT_DIRTY_REPOSITORY = 2
+EXIT_PULL_FAILURE = 3
+EXIT_COMMIT_FAILURE = 4
+EXIT_PUSH_FAILURE = 5
+
+PHASE_SUCCESS = "success"
+PHASE_FAILURE = "failure"
+PHASE_NO_CHANGES = "no-changes"
+PHASE_NOT_APPLICABLE = "not-applicable"
+PHASE_SKIPPED = "skipped"
+DIRTY_REPOSITORY_REASON = "Git repository was not clean at startup."
 
 
 class HealthchecksConfigError(ValueError):
@@ -104,8 +119,8 @@ def utc_log_filename() -> str:
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run a monitored servercopy synchronization and commit a completed "
-            "scheduled workflow."
+            "Run a monitored servercopy synchronization, including pull, "
+            "commit, and push when its output is Git-managed."
         )
     )
     parser.add_argument(
@@ -337,50 +352,76 @@ def report_git_failure(
 ) -> None:
     print(message, file=sys.stderr)
     if error := result.stderr.strip():
-        print(f"Git reported: {error}", file=sys.stderr)
+        print(f"Git reported: {sanitize_git_output(error)}", file=sys.stderr)
 
 
-def preflight_servers_repository(servers_repository: Path) -> str | None:
-    """Require an exact, completely clean Git working-tree root."""
+def sanitize_git_output(output: str) -> str:
+    """Redact URL user information before Git diagnostics reach a transcript."""
+
+    return re.sub(
+        r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@",
+        r"\g<scheme>[redacted]@",
+        output,
+    )
+
+
+def detect_git_root(managed_path: Path) -> tuple[Path | None, str | None]:
+    """Resolve the containing Git worktree, if any."""
+
+    if not managed_path.exists():
+        print("git: not-applicable")
+        print(
+            "Git processing skipped: the managed output directory does not "
+            "exist yet and is not Git-managed."
+        )
+        return None, None
 
     try:
-        worktree = run_git(
-            servers_repository,
-            "rev-parse",
-            "--show-toplevel",
+        worktree = run_git(managed_path, "rev-parse", "--show-toplevel")
+    except OSError as error:
+        print(
+            f"Error: could not inspect Git management: {error}",
+            file=sys.stderr,
         )
-        if worktree.returncode != 0 or not worktree.stdout.strip():
-            report_git_failure(
-                "Error: servercopy_cron requires the servers directory to be "
-                "the root of a completely clean Git working tree before "
-                "synchronization.",
-                worktree,
-            )
-            return "servers directory is not a Git working-tree root."
-        if Path(worktree.stdout.strip()).resolve() != servers_repository.resolve():
-            print(
-                "Error: servercopy_cron requires the servers directory to be "
-                "the root of its Git working tree before synchronization.",
-                file=sys.stderr,
-            )
-            return "servers directory is not the Git working-tree root."
+        return None, f"Git repository detection could not run: {error}"
 
-        status = run_git(servers_repository, "status", "--porcelain")
+    if worktree.returncode != 0 or not worktree.stdout.strip():
+        print("git: not-applicable")
+        print(
+            "Git processing skipped: the managed output directory is not "
+            "inside a Git working tree."
+        )
+        return None, None
+
+    git_root = Path(worktree.stdout.strip()).resolve()
+    print("git: enabled")
+    print(f"git-root: {git_root}")
+    return git_root, None
+
+
+def preflight_servers_repository(git_root: Path) -> tuple[str, str | None]:
+    """Require a completely clean containing Git working tree."""
+
+    try:
+        status = run_git(git_root, "status", "--porcelain")
         if status.returncode != 0:
             report_git_failure(
-                "Error: could not inspect the servers Git working tree "
+                "Error: could not inspect the managed Git working tree "
                 f"(git exit status {status.returncode}).",
                 status,
             )
-            return f"Git preflight failed (exit status {status.returncode})."
+            return (
+                PHASE_FAILURE,
+                f"Git preflight failed (exit status {status.returncode}).",
+            )
     except OSError as error:
         print(f"Error: could not run the Git preflight: {error}", file=sys.stderr)
-        return f"Git preflight could not run: {error}"
+        return PHASE_FAILURE, f"Git preflight could not run: {error}"
 
     if status.stdout:
         print(
             "Error: servercopy_cron rejected the run because it requires a "
-            "completely clean servers Git repository at startup.",
+            "completely clean Git repository at startup.",
             file=sys.stderr,
         )
         print("Git status:", file=sys.stderr)
@@ -390,72 +431,126 @@ def preflight_servers_repository(servers_repository: Path) -> str | None:
             "before retrying.",
             file=sys.stderr,
         )
-        return "servers repository was not clean at startup."
+        return (
+            PHASE_FAILURE,
+            DIRTY_REPOSITORY_REASON,
+        )
 
-    return None
+    print("Git preflight: clean working tree.")
+    return PHASE_SUCCESS, None
+
+
+def pull_repository(git_root: Path) -> tuple[str, str | None]:
+    """Pull the configured upstream without permitting a merge commit."""
+
+    print("Git pull: git pull --ff-only")
+    try:
+        pulled = run_git(git_root, "pull", "--ff-only")
+    except OSError as error:
+        print(f"Error: could not run git pull --ff-only: {error}", file=sys.stderr)
+        return PHASE_FAILURE, f"Git pull could not run: {error}"
+
+    if pulled.returncode != 0:
+        report_git_failure(
+            f"Error: git pull --ff-only failed "
+            f"(exit status {pulled.returncode}); synchronization will continue.",
+            pulled,
+        )
+        return (
+            PHASE_FAILURE,
+            f"Git pull failed (exit status {pulled.returncode}).",
+        )
+
+    pull_output = f"{pulled.stdout}\n{pulled.stderr}".lower()
+    if "already up to date" in pull_output or "already up-to-date" in pull_output:
+        print("Git pull: success (already up to date).")
+    else:
+        print("Git pull: success.")
+    return PHASE_SUCCESS, None
 
 
 def commit_synced_changes(
-    servers_repository: Path,
+    git_root: Path,
+    managed_path: Path,
     servercopy_version: str,
     servercopy_status: int,
-) -> int:
+) -> str:
     """Stage and commit changes after a completed servercopy invocation."""
 
     try:
-        worktree = run_git(servers_repository, "rev-parse", "--show-toplevel")
+        worktree = run_git(git_root, "rev-parse", "--show-toplevel")
         if worktree.returncode != 0 or not worktree.stdout.strip():
             report_git_failure(
-                "Error: the servers directory is not a Git working tree.",
+                "Error: the managed output is no longer in a Git working tree.",
                 worktree,
             )
-            return 1
-        if Path(worktree.stdout.strip()).resolve() != servers_repository.resolve():
+            return PHASE_FAILURE
+        if Path(worktree.stdout.strip()).resolve() != git_root.resolve():
             print(
-                "Error: the servers directory is not the root of its Git working tree.",
+                "Error: the resolved Git root changed during synchronization.",
                 file=sys.stderr,
             )
-            return 1
+            return PHASE_FAILURE
+
+        try:
+            relative_managed_path = managed_path.resolve().relative_to(
+                git_root.resolve()
+            )
+        except ValueError:
+            print(
+                "Error: the managed output is outside the resolved Git root.",
+                file=sys.stderr,
+            )
+            return PHASE_FAILURE
 
         initial_index = run_git(
-            servers_repository, "diff", "--cached", "--quiet", "--exit-code"
+            git_root, "diff", "--cached", "--quiet", "--exit-code"
         )
         if initial_index.returncode == 1:
             print(
-                "Error: refusing to stage or commit because the servers Git index "
+                "Error: refusing to stage or commit because the Git index "
                 "already contains staged changes.",
                 file=sys.stderr,
             )
-            return 1
+            return PHASE_FAILURE
         if initial_index.returncode != 0:
             report_git_failure(
-                "Error: could not inspect the servers Git index "
+                "Error: could not inspect the Git index "
                 f"(git exit status {initial_index.returncode}).",
                 initial_index,
             )
-            return 1
+            return PHASE_FAILURE
 
-        staged = run_git(servers_repository, "add", "-A")
+        if relative_managed_path == Path("."):
+            staged = run_git(git_root, "add", "-A")
+        else:
+            staged = run_git(
+                git_root,
+                "add",
+                "-A",
+                "--",
+                relative_managed_path.as_posix(),
+            )
         if staged.returncode != 0:
             report_git_failure(
                 f"Error: git add failed (exit status {staged.returncode}).",
                 staged,
             )
-            return 1
+            return PHASE_FAILURE
 
         updated_index = run_git(
-            servers_repository, "diff", "--cached", "--quiet", "--exit-code"
+            git_root, "diff", "--cached", "--quiet", "--exit-code"
         )
         if updated_index.returncode == 0:
             print("servercopy completed; no changes to commit.")
-            return 0
+            return PHASE_NO_CHANGES
         if updated_index.returncode != 1:
             report_git_failure(
                 "Error: could not inspect the staged server changes "
                 f"(git exit status {updated_index.returncode}).",
                 updated_index,
             )
-            return 1
+            return PHASE_FAILURE
 
         commit_kind = "cron" if servercopy_status == 0 else "cron partial"
         message = (
@@ -463,22 +558,84 @@ def commit_synced_changes(
             f"[servercopy={servercopy_version} "
             f"servercopy_cron={SERVERCOPY_CRON_VERSION}]"
         )
-        committed = run_git(servers_repository, "commit", "-m", message)
+        committed = run_git(git_root, "commit", "-m", message)
         if committed.returncode != 0:
             report_git_failure(
                 f"Error: git commit failed (exit status {committed.returncode}).",
                 committed,
             )
-            return 1
+            return PHASE_FAILURE
     except OSError as error:
         print(f"Error: could not run Git: {error}", file=sys.stderr)
-        return 1
+        return PHASE_FAILURE
 
     if servercopy_status == 0:
         print(f"Committed synchronized server changes: {message}")
     else:
         print(f"Committed partial server changes: {message}")
-    return 0
+    return PHASE_SUCCESS
+
+
+def push_created_commit(git_root: Path) -> tuple[str, str | None]:
+    """Push one newly created commit to the branch's configured upstream."""
+
+    print("Git push: git push")
+    try:
+        pushed = run_git(git_root, "push")
+    except OSError as error:
+        print(f"Error: could not run git push: {error}", file=sys.stderr)
+        return PHASE_FAILURE, f"Git push could not run: {error}"
+
+    if pushed.returncode != 0:
+        report_git_failure(
+            f"Error: git push failed (exit status {pushed.returncode}).",
+            pushed,
+        )
+        print(
+            "Error: synchronized data were committed locally but were not "
+            "pushed; the local commit was retained.",
+            file=sys.stderr,
+        )
+        return (
+            PHASE_FAILURE,
+            f"Git push failed (exit status {pushed.returncode}).",
+        )
+
+    print("Git push: success.")
+    return PHASE_SUCCESS, None
+
+
+def report_phase_summary(phases: dict[str, str]) -> None:
+    """Print the independently tracked workflow phase results."""
+
+    print("Phase summary:")
+    for phase in (
+        "git-mode",
+        "preflight-clean",
+        "pull",
+        "sync",
+        "commit",
+        "push",
+        "overall",
+    ):
+        print(f"{phase}: {phases[phase]}")
+
+
+def select_failure_status(
+    servercopy_status: int,
+    phases: dict[str, str],
+) -> int:
+    """Choose one deterministic status while preserving every phase result."""
+
+    if servercopy_status != EXIT_SUCCESS:
+        return servercopy_status
+    if phases["pull"] == PHASE_FAILURE:
+        return EXIT_PULL_FAILURE
+    if phases["commit"] == PHASE_FAILURE:
+        return EXIT_COMMIT_FAILURE
+    if phases["push"] == PHASE_FAILURE:
+        return EXIT_PUSH_FAILURE
+    return EXIT_WRAPPER_FAILURE
 
 
 def run_cron_workflow(
@@ -488,6 +645,16 @@ def run_cron_workflow(
     log_path: Path | None = None,
     transcript: RunTranscript | None = None,
 ) -> int:
+    phases = {
+        "git-mode": PHASE_SKIPPED,
+        "preflight-clean": PHASE_SKIPPED,
+        "pull": PHASE_SKIPPED,
+        "sync": PHASE_SKIPPED,
+        "commit": PHASE_SKIPPED,
+        "push": PHASE_SKIPPED,
+        "overall": PHASE_FAILURE,
+    }
+
     try:
         ping_start(check_uuid)
     except HealthchecksPingError:
@@ -496,32 +663,73 @@ def run_cron_workflow(
             "the scheduled workflow was not started.",
             file=sys.stderr,
         )
-        return 1
+        report_phase_summary(phases)
+        return EXIT_WRAPPER_FAILURE
 
-    preflight_failure = preflight_servers_repository(servers_repository)
-    if preflight_failure is not None:
+    git_root, detection_failure = detect_git_root(servers_repository)
+    if detection_failure is not None:
+        phases["git-mode"] = PHASE_FAILURE
+        report_phase_summary(phases)
         return finish_failed_run(
             check_uuid,
-            1,
-            preflight_failure,
+            EXIT_WRAPPER_FAILURE,
+            detection_failure,
             log_path,
             transcript,
         )
 
+    pull_failure: str | None = None
+    if git_root is None:
+        phases["git-mode"] = PHASE_NOT_APPLICABLE
+        phases["preflight-clean"] = PHASE_NOT_APPLICABLE
+        phases["pull"] = PHASE_NOT_APPLICABLE
+        phases["commit"] = PHASE_NOT_APPLICABLE
+        phases["push"] = PHASE_NOT_APPLICABLE
+    else:
+        phases["git-mode"] = "enabled"
+        preflight_result, preflight_failure = preflight_servers_repository(
+            git_root
+        )
+        phases["preflight-clean"] = preflight_result
+        if preflight_failure is not None:
+            report_phase_summary(phases)
+            return finish_failed_run(
+                check_uuid,
+                (
+                    EXIT_DIRTY_REPOSITORY
+                    if preflight_failure == DIRTY_REPOSITORY_REASON
+                    else EXIT_WRAPPER_FAILURE
+                ),
+                preflight_failure,
+                log_path,
+                transcript,
+            )
+
+        phases["pull"], pull_failure = pull_repository(git_root)
+
     servercopy_version = get_servercopy_version(servercopy_command)
     if servercopy_version is None:
+        report_phase_summary(phases)
+        failure_reasons = []
+        if pull_failure:
+            failure_reasons.append(pull_failure)
+        failure_reasons.append("could not determine the servercopy version.")
         return finish_failed_run(
             check_uuid,
-            1,
-            "could not determine the servercopy version.",
+            EXIT_WRAPPER_FAILURE,
+            " ".join(failure_reasons),
             log_path,
             transcript,
         )
     print(f"servercopy version: {servercopy_version}")
 
+    print("Synchronization: starting servercopy.")
     servercopy_status = run_servercopy(servercopy_command, servers_repository)
     failure_reasons: list[str] = []
+    if pull_failure:
+        failure_reasons.append(pull_failure)
     if servercopy_status != 0:
+        phases["sync"] = PHASE_FAILURE
         print(
             f"Error: servercopy failed (exit status {servercopy_status}).",
             file=sys.stderr,
@@ -529,21 +737,31 @@ def run_cron_workflow(
         failure_reasons.append(
             f"servercopy failed (exit status {servercopy_status})."
         )
+    else:
+        phases["sync"] = PHASE_SUCCESS
+        print("Synchronization: success.")
 
-    git_status = commit_synced_changes(
-        servers_repository,
-        servercopy_version,
-        servercopy_status,
-    )
-    if git_status != 0:
-        failure_reasons.append(
-            f"Git post-sync workflow failed (exit status {git_status})."
+    if git_root is not None:
+        phases["commit"] = commit_synced_changes(
+            git_root,
+            servers_repository,
+            servercopy_version,
+            servercopy_status,
         )
+        if phases["commit"] == PHASE_FAILURE:
+            failure_reasons.append("Git staging or commit processing failed.")
+            phases["push"] = PHASE_SKIPPED
+        elif phases["commit"] == PHASE_SUCCESS:
+            phases["push"], push_failure = push_created_commit(git_root)
+            if push_failure:
+                failure_reasons.append(push_failure)
+        else:
+            phases["push"] = PHASE_SKIPPED
 
     if failure_reasons:
-        overall_status = (
-            servercopy_status if servercopy_status != 0 else git_status
-        )
+        phases["overall"] = PHASE_FAILURE
+        overall_status = select_failure_status(servercopy_status, phases)
+        report_phase_summary(phases)
         return finish_failed_run(
             check_uuid,
             overall_status,
@@ -560,8 +778,13 @@ def run_cron_workflow(
             "workflow completed.",
             file=sys.stderr,
         )
-        return 1
-    return 0
+        phases["overall"] = PHASE_FAILURE
+        report_phase_summary(phases)
+        return EXIT_WRAPPER_FAILURE
+
+    phases["overall"] = PHASE_SUCCESS
+    report_phase_summary(phases)
+    return EXIT_SUCCESS
 
 
 def run_locked_workflow(

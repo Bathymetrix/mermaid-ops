@@ -20,14 +20,18 @@ acquire lock and validate monitoring configuration
 send Healthchecks.io /start
         |
         v
-verify the servers Git repository is completely clean
+detect whether $MERMAID/servers is inside a Git working tree
         |
         v
-is the repository clean?
-    no  --> print Git status and send /fail
-            perform no synchronization, staging, or commit
-            exit nonzero
-    yes --> continue
+Git-managed?
+    no  --> mark Git phases not-applicable and continue
+    yes --> require a clean repository
+                |
+                +-- dirty --> send /fail without pull or synchronization
+                |
+                +-- clean --> git pull --ff-only
+                                  |
+                                  +-- failure --> record failure and continue
         |
         v
 query servercopy --version
@@ -43,28 +47,27 @@ did version discovery succeed?
 run servercopy
         |
         v
-did synchronization succeed?
-    no  --> record the synchronization failure and continue
-    yes --> record synchronization success and continue
+Git-managed?
+    no  --> skip commit and push
+    yes --> commit any resulting managed changes, even after pull or sync failure
+                |
+                +-- new commit --> git push
+                |
+                +-- no changes or commit failure --> do not push
         |
         v
-validate and perform the conservative Git workflow
+report every phase independently
         |
-        v
-did Git processing succeed?
-    no  --> report the Git failure and any synchronization failure
-            send /fail
-            exit nonzero
-    yes --> did synchronization succeed?
-                no  --> send /fail and exit with the synchronization status
-                yes --> send success and exit zero
+        +-- any applicable failure --> send /fail and exit nonzero
+        |
+        +-- all applicable phases succeeded --> send success and exit zero
 ```
 
 The wrapper requires a nonempty `MERMAID` environment variable. It derives all
 paths without a separate `MERMAID_OPS` setting:
 
 ```text
-servers repository   $MERMAID/servers
+managed output       $MERMAID/servers
 lock                  $MERMAID/logs/servercopy_cron.lock
 workflow logs         $MERMAID/logs/servercopy_cron/<UTC>.log
 servercopy command    <mermaid-ops repository>/servercopy
@@ -260,8 +263,9 @@ even if other files transferred.
 If `servercopy` returns nonzero, the wrapper:
 
 - records the synchronization failure;
-- waits for the completed invocation, then runs the normal Git workflow;
-- commits any completed downloads using a partial-run commit message;
+- waits for the completed invocation, then runs the applicable Git workflow;
+- commits any completed downloads using a partial-run commit message and
+  attempts to push that new commit;
 - attempts one Healthchecks.io failure ping; and
 - returns the original nonzero synchronization status when Git processing
   succeeds, even if the failure ping also fails.
@@ -283,59 +287,88 @@ The outer lock coordinates `servercopy_cron` invocations. Do not launch
 command's internal lock covers synchronization, but it does not cover the
 wrapper's later Git and terminal-ping window.
 
-## Git preflight and post-synchronization behavior
+## Optional Git workflow
 
-After sending `/start` but before querying the `servercopy` version or starting
-synchronization, the wrapper requires `$MERMAID/servers` to be the exact root of
-a completely clean Git working tree. It runs the legacy-compatible
-`git status --porcelain`, which reports staged changes, unstaged tracked
-changes, tracked deletions, and untracked files while omitting ignored files.
-If any changes are present, the wrapper prints the status output and directs
-the operator to inspect the changes and commit legitimate synchronization
-results. It then sends `/fail` and exits nonzero without running `servercopy`,
-staging files, or creating a commit.
-Failure to inspect the repository follows the same monitored failure path and
-includes captured Git stderr when available.
-
-After every completed `servercopy` invocation, regardless of its exit status,
-the wrapper again verifies that `$MERMAID/servers` is the exact root of a Git
-working tree. It then checks the entire index before staging anything.
-
-If the index already contains staged changes, the wrapper refuses to run
-`git add` or `git commit`, sends the failure ping, and exits nonzero. This
-prevents an unattended run from committing work staged by a person or another
-process.
-
-With a clean index, the wrapper runs:
-
-`git add -A` with `$MERMAID/servers` as its working directory.
-
-If the index is still empty, it prints a concise no-changes message and creates
-no empty commit. Otherwise a successful synchronization creates a commit such
-as:
+After sending `/start`, the wrapper runs `git rev-parse --show-toplevel` from
+`$MERMAID/servers`. This correctly recognizes repository roots, managed
+subdirectories, and Git worktrees without relying on a `.git` directory.
+The resolved mode and root are logged:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.5.0]
+git: enabled
+git-root: /home/jdsimon/mermaid
+```
+
+If the managed output is not inside a Git working tree, Git is
+`not-applicable`: the wrapper skips the clean-tree guard, pull, staging,
+commit, and push, then runs `servercopy` normally. It does not initialize a
+repository, and the absence of one is not an error.
+
+In Git mode, the wrapper checks the entire resolved working tree with the
+legacy-compatible `git status --porcelain`. This reports staged changes,
+unstaged tracked changes, tracked deletions, and untracked files while omitting
+ignored files. A dirty repository aborts the run before pull or synchronization
+and produces a monitored failure.
+
+For a clean repository, the wrapper runs:
+
+```text
+git pull --ff-only
+```
+
+The command uses the checked-out branch's configured upstream. It specifies no
+remote or branch and cannot create a merge commit. A pull failure is recorded
+as an overall failure but does not prevent `servercopy` from collecting
+available remote instrument data.
+
+After every completed `servercopy` invocation, regardless of the pull or
+synchronization result, the wrapper checks that the same Git root remains
+active and that the index contains no preexisting staged changes. It stages all
+managed changes with `git add -A`; when the managed output is a repository
+subdirectory, an explicit pathspec limits staging to that directory. The
+repository-wide clean-start and index checks remain conservative.
+
+If the managed scope contains no changes, the wrapper creates no empty commit
+and does not push. Otherwise a successful synchronization creates a commit
+such as:
+
+```text
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.6.0]
 ```
 
 A failed synchronization that produced changes instead creates:
 
 ```text
-servercopy [cron partial]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.5.0]
+servercopy [cron partial]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.6.0]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
 independently versioned synchronization engine and cron wrapper used for the
-run. After Git processing, the wrapper determines the overall outcome
-independently: synchronization and Git must both succeed before it sends the
-success ping and exits zero. A synchronization or Git failure sends `/fail`;
-when both fail, both are reported. The wrapper never pushes.
+run. The `partial` label depends only on the `servercopy` result; a pull failure
+alone does not make a successful synchronization commit partial.
 
-A Git worktree check, index inspection, staging, or commit failure is reported
-to stderr, followed by an attempted failure ping and a nonzero exit. The wrapper
-does not reset the index, remove lock files, roll back files, or otherwise
-attempt automatic recovery. A success-ping failure after completed Git work
-also exits nonzero but does not attempt a rollback or send `/fail`.
+Every newly created commit, including a partial commit or one created after a
+failed pull, triggers exactly one plain `git push` to the configured upstream.
+A push failure retains the local commit and makes the overall run fail. The
+wrapper never force-pushes, creates remotes or upstreams, changes branches,
+rebases, resets, amends, or performs automatic history repair.
+
+Pull, synchronization, commit, and push results remain independent. A later
+successful phase preserves useful work but never erases an earlier failure.
+The final transcript records:
+
+```text
+git-mode: enabled
+preflight-clean: success
+pull: success
+sync: success
+commit: success
+push: success
+overall: success
+```
+
+Non-Git phases instead report `not-applicable`; a no-change Git run reports
+`commit: no-changes` and `push: skipped`.
 
 ## Production schedule and monitoring
 
@@ -364,26 +397,45 @@ schedule, Grace Time, or Integrations.
 
 ## Exit status summary
 
+Normal workflow failures use this deterministic precedence:
+
+1. a nonzero `servercopy` status is preserved;
+2. otherwise pull failure returns `3`;
+3. otherwise staging or commit failure returns `4`;
+4. otherwise push failure returns `5`.
+
+Every failed phase is still logged and included in the Healthchecks failure
+summary when several phases fail together. Early wrapper/configuration failures
+return `1`, and a dirty starting repository returns `2`.
+
 - `--version` or `-v`: zero without requiring `MERMAID`, the lock, or monitoring
   configuration.
-- Missing `MERMAID`: nonzero with direct stderr output and no log because the
+- Missing `MERMAID`: `1` with direct stderr output and no log because the
   configured log location cannot be resolved.
-- Lock setup failure, lock acquisition failure, or overlap refusal: nonzero and
+- Lock setup failure, lock acquisition failure, or overlap refusal: `1` and
   logged, with no monitoring ping, synchronization, or Git action.
-- Missing, unreadable, empty, or invalid UUID file: nonzero, with no monitoring
+- Missing, unreadable, empty, or invalid UUID file: `1`, with no monitoring
   ping, synchronization, or Git action; the failure is recorded in the
   invocation log.
-- Start-ping failure: nonzero, with no synchronization or Git action.
-- `servercopy --version` execution failure or malformed output: nonzero after
+- Start-ping failure: `1`, with no synchronization or Git action.
+- Git detection or status-inspection failure: `1` after one failure-ping
+  attempt.
+- Dirty Git repository at startup: `2` after one failure-ping attempt, without
+  pull or synchronization.
+- `servercopy --version` execution failure or malformed output: `1` after
   one failure-ping attempt, with no synchronization or Git action.
 - Synchronization failure with successful Git processing: the original nonzero
   `servercopy` status after committing any partial changes (or reporting no
-  changes) and attempting one failure ping.
-- Git validation, inspection, staging, or commit failure: nonzero after one
-  failure-ping attempt and with no automatic recovery; any simultaneous
-  synchronization failure is also reported.
+  changes), pushing a new commit when created, and attempting one failure ping.
+- Pull failure with successful synchronization and later Git processing: `3`;
+  synchronization and post-run preservation still run.
+- Git staging or commit failure without a synchronization or pull failure: `4`
+  after one failure-ping attempt; push is skipped.
+- Push failure without a synchronization, pull, or commit failure: `5`; the
+  local commit remains intact.
+- Non-Git synchronization success: zero; Git phases are not applicable.
 - Successful synchronization with no changes: zero after the success ping.
-- Successful synchronization and commit: zero after the success ping.
+- Successful synchronization, commit, and push: zero after the success ping.
 - Success-ping failure after otherwise successful work: nonzero, with completed
   Git work left intact and no failure ping.
 - Failure-ping failure: the original workflow failure status, with the
@@ -464,8 +516,10 @@ git -C /home/jdsimon/mermaid/servers status
 
 Determine whether staging or a commit completed before the failure. Preserve
 valid synchronized data, repair the specific Git problem, and commit or clean
-the repository deliberately. The wrapper never resets the index, rewrites
-history, or pushes.
+the repository deliberately. For a push failure, the synchronized commit
+remains local; repair the upstream, authentication, network, or divergence
+problem and push deliberately. The wrapper never resets the index, rewrites
+history, force-pushes, or repairs divergence automatically.
 
 ### Cron startup failure
 

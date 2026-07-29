@@ -299,5 +299,7 @@ git pull --ff-only
 ```
 
 Review release notes and operational-version changes, then perform one manual
-wrapper run before relying on the next schedule. The wrapper never pushes the
-servers repository.
+wrapper run before relying on the next schedule. The wrapper now pulls the
+servers repository with fast-forward-only policy and pushes each commit it
+creates; confirm that the checked-out production branch has a configured
+upstream and non-interactive pull/push authentication.

@@ -9,8 +9,8 @@ The repository owns two directly executable, standard-library-only Python
 - `servercopy` mirrors configured remote content into separate logical-user
   directories, records run-ledger rows, and writes synchronization transcripts.
 - `servercopy_cron` wraps a scheduled synchronization with invocation logging,
-  single-host locking, Healthchecks.io lifecycle pings, a clean-repository
-  preflight, and Git preservation of completed downloads. It never pushes.
+  single-host locking, Healthchecks.io lifecycle pings, and optional Git
+  pull/commit/push processing when the managed output is inside a repository.
 
 Remote deletions do not remove local mirror files. Neither program performs
 normalization, conversion, catalog generation, exports, or other downstream
@@ -72,9 +72,12 @@ Show the public command interfaces:
 ./servercopy_cron --version
 ```
 
-Use `servercopy_cron` only for the complete monitored synchronization-and-commit
-workflow. Its production invocation and operator procedures are documented in
-the linked installation guide and runbook.
+Use `servercopy_cron` only for the complete monitored synchronization workflow.
+When `$MERMAID/servers` is Git-managed, the wrapper requires a clean repository,
+pulls with fast-forward-only policy, preserves results in a commit, and pushes
+that new commit. A non-Git output is supported and skips all Git processing.
+Its production invocation and operator procedures are documented in the linked
+installation guide and runbook.
 
 ## Configuration
 
@@ -230,8 +233,12 @@ operational version increment.
 - `servercopy` never changes remote ownership or permissions.
 - Do not expose credentials or the Healthchecks.io UUID.
 - Do not run `servercopy` manually while the scheduled wrapper may be active.
-- `servercopy_cron` requires a clean servers repository at startup, commits
-  resulting downloads after every completed synchronization invocation
-  (including partially failed runs), and never pushes. A synchronization
-  failure remains an overall wrapper failure even when its partial results are
-  committed successfully.
+- When its output is Git-managed, `servercopy_cron` requires a clean repository
+  at startup, pulls with `--ff-only`, commits resulting downloads after every
+  completed synchronization invocation (including partially failed runs), and
+  pushes each new commit. Pull, synchronization, commit, or push failures remain
+  overall wrapper failures even when later phases preserve work successfully.
+- When its output is not Git-managed, `servercopy_cron` runs synchronization
+  normally and treats all Git phases as not applicable.
+- The wrapper never force-pushes, repairs history, creates an upstream, or
+  initializes a repository.
