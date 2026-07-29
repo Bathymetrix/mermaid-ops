@@ -245,16 +245,18 @@ interpreter therefore remains authoritative for both programs.
 
 For each configured source, `servercopy` runs the same whole-tree `lftp mirror`
 after selecting that source's configured remote root and local destination.
-RUDICS SFTP, ESO FTPS, and Kobe FTPS differ only in connection and path
-configuration. There is no suffix allowlist: readable shell files, account
-configuration, scripts, tools, histories, and other remotely visible content
-are intentionally within scope.
+The mirror uniformly excludes directories named exactly `backups`; it traverses
+every other readable directory. RUDICS SFTP, ESO FTPS, and Kobe FTPS differ only
+in connection and path configuration. There is no suffix allowlist: readable
+shell files, account configuration, scripts, tools, histories, and other
+remotely visible content outside `backups/` are intentionally within scope.
 
 Whole-tree means the complete remote tree that the authenticated account is
-allowed to read. A path can be visible in a remote listing but unreadable
-because of server-side ownership or permissions. Such a path remains absent
-locally. If the access failure makes `lftp` return nonzero, the source and
-overall `servercopy` run are failures even if other files transferred.
+allowed to read, excluding `backups/` directories. A path can be visible in a
+remote listing but unreadable because of server-side ownership or permissions.
+Such a path remains absent locally. If the access failure makes `lftp` return
+nonzero, the source and overall `servercopy` run are failures even if other
+files transferred.
 
 If `servercopy` returns nonzero, the wrapper:
 
@@ -312,7 +314,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.0.0 servercopy_cron=2.4.2]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.0.1 servercopy_cron=2.4.2]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
@@ -439,7 +441,7 @@ hide the failure.
 Correct the remote permission, network, or credential problem when appropriate,
 inspect and commit any valid downloaded files as described above, and rerun
 manually. A nonzero `lftp` status remains a failed run even when most of the
-complete readable tree was mirrored successfully.
+complete readable tree outside `backups/` was mirrored successfully.
 
 ### Git failure
 

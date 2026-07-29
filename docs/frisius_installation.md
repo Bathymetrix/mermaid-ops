@@ -52,8 +52,9 @@ target.
 
 Each configured RUDICS SFTP, ESO FTPS, and Kobe FTPS source uses the same
 whole-tree transfer algorithm: connect, select the configured remote root and
-logical-user destination, and run one `lftp mirror`. Only connection and path
-configuration differ. The mirror intentionally includes all content the
+logical-user destination, and run one `lftp mirror` that excludes directories
+named exactly `backups`. Only connection and path configuration differ. Outside
+that single exclusion, the mirror intentionally includes all content the
 authenticated account can read, not only recognized scientific filename
 suffixes. Plan storage and Git review accordingly: readable shell files,
 configuration, scripts, tools, histories, and monitoring artifacts may appear

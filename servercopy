@@ -27,7 +27,7 @@ if sys.version_info < MIN_VERSION:
         f"(found {sys.version_info.major}.{sys.version_info.minor})."
     )
 
-SERVERCOPY_VERSION = "2.0.0"
+SERVERCOPY_VERSION = "2.0.1"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
@@ -115,11 +115,13 @@ def build_lftp_script(
     lines = lftp_connection_lines(source, password)
     lines.append(f"cd {quote(source.remote_root)}")
     lines.append(f"lcd {quote(str(destination))}")
-    # Intentionally use one plain whole-tree mirror. This implementation was
-    # validated on the production servers using lftp 4.4.8. Do not reintroduce
-    # suffix filtering, generated file lists, capability-dependent flags, or
-    # output-parsing machinery without a demonstrated operational need.
-    lines.append("mirror --dry-run --verbose" if preview else "mirror --verbose")
+    # Intentionally keep one whole-tree mirror with only the operational
+    # backups-directory exclusion. This is compatible with lftp 4.4.8; do not
+    # reintroduce suffix or endpoint-specific file selection.
+    mirror = 'mirror --exclude="(^|/)backups/$"'
+    lines.append(
+        f"{mirror} --dry-run --verbose" if preview else f"{mirror} --verbose"
+    )
     return "\n".join([*lines, "bye", ""])
 
 

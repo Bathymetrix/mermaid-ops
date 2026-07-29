@@ -129,26 +129,29 @@ lcd <output>/<logical_user>
 mirror
 ```
 
-The implementation runs one whole-tree `lftp mirror` per configured source.
-Protocol, host, credentials, remote root, and local destination are
-configuration; the transfer algorithm does not vary for RUDICS SFTP accounts,
-ESO FTPS, Kobe FTPS, or other endpoints. The mirror does not delete remote or
-local files, reverse the transfer, or force overwrites.
+The implementation runs one whole-tree `lftp mirror` per configured source,
+with one uniform exclusion for directories named exactly `backups`. Protocol,
+host, credentials, remote root, and local destination are configuration; the
+transfer algorithm does not vary for RUDICS SFTP accounts, ESO FTPS, Kobe FTPS,
+or other endpoints. The mirror does not delete remote or local files, reverse
+the transfer, or force overwrites.
 
 Whole-tree mirroring replaced suffix-filtered mirroring for every supported
 endpoint. Downloads are no longer restricted to `.MER`, `.LOG`, `.BIN`, `.cmd`,
 `.out`, `.vit`, `.S41`, `.S61`, or any other filename allowlist. Shell startup
 files, account configuration, scripts, tools, histories, and other remotely
 visible content may therefore appear beneath the logical-user destination.
-That broader scope is intentional.
+That broader scope is intentional. The only file-selection rule is the small
+operational exclusion for `backups/` directories, which are not traversed.
 
 Here, **whole-tree mirror** means the complete remote tree that the
-authenticated account is allowed to read. A directory listing may expose paths
-that server-side ownership or permissions prevent `lftp` from downloading.
-Those paths remain absent locally, and an access failure is reported through
-the real `lftp` exit status; it is not evidence of suffix filtering. See the
-[whole-tree design note](docs/servercopy_complete_mirror_experiment.md) for the
-detailed permission and maintainer policy.
+authenticated account is allowed to read, excluding `backups/` directories. A
+directory listing may expose paths that server-side ownership or permissions
+prevent `lftp` from downloading. Those paths remain absent locally, and an
+access failure is reported through the real `lftp` exit status; it is not
+evidence of suffix filtering. See the [whole-tree design
+note](docs/servercopy_complete_mirror_experiment.md) for the detailed scope,
+permission, and maintainer policy.
 
 The implementation deliberately uses the smallest practical subset of `lftp`
 features validated on the production environments, including legacy `lftp

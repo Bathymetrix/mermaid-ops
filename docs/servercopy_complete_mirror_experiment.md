@@ -2,15 +2,16 @@
 
 ## Maintainer warning
 
-> This implementation is intentionally plain. It targets the legacy `lftp
+> This implementation is intentionally direct. It targets the legacy `lftp
 > 4.4.8` available on Frisius and has been validated against the production
 > data layout. `servercopy` intentionally mirrors the complete readable remote
-> tree for each configured account. Do not reintroduce suffix allowlists or
-> endpoint-specific file-selection logic merely to exclude shell files, tools,
-> histories, or other account content. Some listed paths may remain unavailable
-> because of remote permissions; that limitation should be documented and
-> surfaced, not hidden through increasingly complex filtering. Change the
-> design only in response to a demonstrated operational failure.
+> tree for each configured account, excluding directories named exactly
+> `backups`. Do not expand that one operational exclusion into suffix allowlists
+> or endpoint-specific file-selection logic merely to exclude shell files,
+> tools, histories, or other account content. Some listed paths may remain
+> unavailable because of remote permissions; that limitation should be
+> documented and surfaced, not hidden through increasingly complex filtering.
+> Change the design only in response to a demonstrated operational failure.
 
 ## Transfer model
 
@@ -20,7 +21,7 @@ Every configured source follows the same sequence:
 connect
 cd <configured remote directory>
 lcd <configured local destination>
-mirror
+mirror (excluding backups/ directories)
 ```
 
 Configuration supplies the protocol, host, username and credentials, remote
@@ -36,19 +37,22 @@ This whole-tree model applies to every configured source. It replaced fixed
 suffix allowlists, numbered-suffix discovery, generated file selections, and
 repeated suffix-specific mirror passes. Downloads are no longer restricted to
 `.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`, `.S61`, or any other
-allowlist.
+filename allowlist.
 
 The broader local scope is deliberate. Any readable content beneath the
-configured remote root can appear in the mirror, including shell startup
-files, account configuration, scripts, tools, histories, monitoring artifacts,
-and other files unrelated to the scientific data stream.
+configured remote root can appear in the mirror, including shell startup files,
+account configuration, scripts, tools, histories, monitoring artifacts, and
+other files unrelated to the scientific data stream. The sole selection rule
+excludes any directory named exactly `backups`, at any depth, from traversal.
+The same rule applies to every endpoint; names such as `backups-old` and files
+named `backups` remain in scope.
 
 ## Remote permissions and completeness
 
 In this design, **whole-tree mirror** means:
 
 > Mirror the entire remote tree that the authenticated account is allowed to
-> read.
+> read, excluding `backups/` directories.
 
 It does not promise a byte-for-byte local copy of every path visible in a
 remote directory listing. Server-side ownership and permissions can allow an
@@ -62,7 +66,8 @@ mirror: Access failed: Permission denied (.buoy_monitoring.sh.nohup.202607041220
 This is a remote permission constraint, not evidence that filename filtering
 remains active. `servercopy` must not attempt to change remote ownership or
 permissions, and an inaccessible path remains absent from the local mirror.
-The accurate completeness claim is therefore **complete readable remote tree**.
+The accurate completeness claim is therefore **complete readable remote tree,
+excluding `backups/` directories**.
 
 An access failure is still an operational failure when `lftp` returns nonzero.
 Do not describe such a run as fully successful merely because other readable
@@ -76,7 +81,7 @@ Frisius provides legacy `lftp 4.4.8`. The minimal FTPS connection and
 whole-tree mirror were tested against an existing Kobe destination containing
 5,858 files. The comparison correctly identified only 6 new files and 9
 modified files, transferring 3,094,464 bytes rather than recopying the complete
-readable tree.
+eligible readable tree.
 
 Remote listing and comparison took roughly ten minutes before transfer began.
 Comparable delays have occurred on macOS and on runs that ultimately found no
@@ -87,7 +92,8 @@ The earlier suffix-filtered design added substantial discovery and
 multi-command complexity and depended on fragile, version-sensitive `lftp`
 behavior. The whole-tree design is easier to understand and maintain on the
 legacy production installation. Retaining additional readable account content
-locally is the accepted tradeoff.
+locally is the accepted tradeoff; omitting archival `backups/` trees is the one
+small operational refinement.
 
 ## Output and heartbeat
 
