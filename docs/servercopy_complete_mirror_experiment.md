@@ -1,21 +1,20 @@
-# Servercopy Whole-Tree Mirror Design
+# Servercopy Whole-Tree Mirror Experiment (Superseded)
 
-## Maintainer warning
+## Status
 
-> This implementation is intentionally direct. It targets the legacy `lftp
-> 4.4.8` available on Frisius and has been validated against the production
-> data layout. `servercopy` intentionally mirrors the complete readable remote
-> tree for each configured account, excluding directories named exactly
-> `backups`. Do not expand that one operational exclusion into suffix allowlists
-> or endpoint-specific file-selection logic merely to exclude shell files,
-> tools, histories, or other account content. Some listed paths may remain
-> unavailable because of remote permissions; that limitation should be
-> documented and surfaced, not hidden through increasingly complex filtering.
-> Change the design only in response to a demonstrated operational failure.
+This document records the superseded whole-tree experiment and its production
+evidence. Current `servercopy` behavior uses one suffix-filtered `lftp mirror`
+per configured source. The command includes `.MER`, `.LOG`, `.BIN`, `.cmd`,
+`.out`, `.vit`, `.S41`, `.S61`, and exactly three-digit suffixes from `.000`
+through `.999`, and excludes directories named exactly `backups`.
+
+The current implementation expresses the numbered family directly as
+`*.[0-9][0-9][0-9]`. It performs no preliminary remote listing, suffix
+discovery, or suffix-by-suffix mirror passes.
 
 ## Transfer model
 
-Every configured source follows the same sequence:
+During the experiment, every configured source followed the same sequence:
 
 ```text
 connect
@@ -24,32 +23,30 @@ lcd <configured local destination>
 mirror (excluding backups/ directories)
 ```
 
-Configuration supplies the protocol, host, username and credentials, remote
-root, and logical-user destination. The transfer implementation has no
-RUDICS-, ESO-, Kobe-, or other endpoint-specific file-selection branches.
+Configuration still supplies the protocol, host, username and credentials,
+remote root, and logical-user destination. The current transfer implementation
+has no RUDICS-, ESO-, Kobe-, or other endpoint-specific file-selection
+branches.
 
-FTPS uses the three TLS settings validated on the production-style Frisius
-environment. SFTP uses its direct connection URL without optional modern
-settings. Both protocols then use one whole-tree `mirror`. Normal operation
-does not request deletion, reverse mirroring, or forced overwrites.
+FTPS still uses the three TLS settings validated on the production-style
+Frisius environment. SFTP still uses its direct connection URL without
+optional modern settings. Both protocols use one mirror command. Normal
+operation does not request deletion, reverse mirroring, or forced overwrites.
 
-This whole-tree model applies to every configured source. It replaced fixed
+The whole-tree model applied to every configured source. It replaced fixed
 suffix allowlists, numbered-suffix discovery, generated file selections, and
-repeated suffix-specific mirror passes. Downloads are no longer restricted to
-`.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`, `.S61`, or any other
-filename allowlist.
+repeated suffix-specific mirror passes. During that experiment, downloads were
+not restricted to `.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`,
+`.S61`, or any other filename allowlist.
 
-The broader local scope is deliberate. Any readable content beneath the
-configured remote root can appear in the mirror, including shell startup files,
-account configuration, scripts, tools, histories, monitoring artifacts, and
-other files unrelated to the scientific data stream. The sole selection rule
-excludes any directory named exactly `backups`, at any depth, from traversal.
-The same rule applies to every endpoint; names such as `backups-old` and files
-named `backups` remain in scope.
+That broader local scope was deliberate during the experiment. Any readable
+content beneath the configured remote root could appear in the mirror. Current
+runs select only the documented suffix allowlist and continue to exclude any
+directory named exactly `backups`, at any depth, from traversal.
 
 ## Remote permissions and completeness
 
-In this design, **whole-tree mirror** means:
+In the superseded design, **whole-tree mirror** meant:
 
 > Mirror the entire remote tree that the authenticated account is allowed to
 > read, excluding `backups/` directories.
@@ -63,11 +60,9 @@ account to list a path without allowing it to read that path. For example, the
 mirror: Access failed: Permission denied (.buoy_monitoring.sh.nohup.20260704122043)
 ```
 
-This is a remote permission constraint, not evidence that filename filtering
-remains active. `servercopy` must not attempt to change remote ownership or
-permissions, and an inaccessible path remains absent from the local mirror.
-The accurate completeness claim is therefore **complete readable remote tree,
-excluding `backups/` directories**.
+This is a remote permission constraint. `servercopy` must not attempt to change
+remote ownership or permissions, and an inaccessible eligible path remains
+absent from the local mirror.
 
 An access failure is still an operational failure when `lftp` returns nonzero.
 Do not describe such a run as fully successful merely because other readable
@@ -88,12 +83,10 @@ Comparable delays have occurred on macOS and on runs that ultimately found no
 new files. A long quiet comparison phase is therefore normal and should not be
 "optimized" without evidence of an actual operational problem.
 
-The earlier suffix-filtered design added substantial discovery and
-multi-command complexity and depended on fragile, version-sensitive `lftp`
-behavior. The whole-tree design is easier to understand and maintain on the
-legacy production installation. Retaining additional readable account content
-locally is the accepted tradeoff; omitting archival `backups/` trees is the one
-small operational refinement.
+The earlier suffix-filtered design added discovery and multi-command
+complexity. The restored design avoids those mechanisms: it combines all
+include globs in one mirror command and matches the entire numbered family
+directly.
 
 ## Output and heartbeat
 

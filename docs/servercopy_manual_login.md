@@ -97,11 +97,10 @@ exit
   fast or complete; the remote listing and comparison may be quiet for
   approximately ten minutes even when no files need transfer.
 
-- `servercopy` mirrors the complete readable tree beneath the configured remote
-  root for RUDICS, ESO, and Kobe alike, excluding directories named exactly
-  `backups`. It does not filter by scientific filename suffix, so shell files,
-  account configuration, scripts, tools, histories, and other readable account
-  content outside `backups/` may appear locally.
+- `servercopy` runs one suffix-filtered mirror beneath the configured remote
+  root for RUDICS, ESO, and Kobe alike. It selects `.MER`, `.LOG`, `.BIN`,
+  `.cmd`, `.out`, `.vit`, `.S41`, `.S61`, and exactly three-digit suffixes,
+  while excluding directories named exactly `backups`.
 
 - A path shown by `ls` or `cls` is not necessarily readable. Server-side
   ownership or permissions may cause `mirror: Access failed: Permission

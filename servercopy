@@ -27,11 +27,22 @@ if sys.version_info < MIN_VERSION:
         f"(found {sys.version_info.major}.{sys.version_info.minor})."
     )
 
-SERVERCOPY_VERSION = "2.0.2"
+SERVERCOPY_VERSION = "2.1.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
 HEARTBEAT_SECONDS = 30.0
+MIRROR_INCLUDE_GLOBS = (
+    "*.MER",
+    "*.LOG",
+    "*.BIN",
+    "*.cmd",
+    "*.out",
+    "*.vit",
+    "*.S41",
+    "*.S61",
+    "*.[0-9][0-9][0-9]",
+)
 
 
 class ConfigError(Exception):
@@ -115,19 +126,22 @@ def build_lftp_script(
     lines = lftp_connection_lines(source, password)
     lines.append(f"cd {quote(source.remote_root)}")
     lines.append(f"lcd {quote(str(destination))}")
-    # Intentionally keep one whole-tree mirror with only the operational
-    # backups-directory exclusion. This is compatible with lftp 4.4.8; do not
-    # reintroduce suffix or endpoint-specific file selection.
-    mirror = 'mirror --exclude="(^|/)backups/$"'
-    lines.append(
-        f"{mirror} --dry-run --verbose" if preview else f"{mirror} --verbose"
-    )
+    mirror_options = [
+        '--exclude="(^|/)backups/$"',
+        *(f"--include-glob={pattern}" for pattern in MIRROR_INCLUDE_GLOBS),
+        *(["--dry-run"] if preview else []),
+        "--verbose",
+    ]
+    lines.append(f"mirror {' '.join(mirror_options)}")
     return "\n".join([*lines, "bye", ""])
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Mirror configured remote trees except directories named 'backups'."
+        description=(
+            "Mirror allowed file suffixes from configured remote trees, "
+            "excluding directories named 'backups'."
+        )
     )
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("-c", "--check", action="store_true", help="validate locally only")

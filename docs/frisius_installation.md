@@ -51,14 +51,12 @@ without first demonstrating an operational need on every supported deployment
 target.
 
 Each configured RUDICS SFTP, ESO FTPS, and Kobe FTPS source uses the same
-whole-tree transfer algorithm: connect, select the configured remote root and
-logical-user destination, and run one `lftp mirror` that excludes directories
-named exactly `backups`. Only connection and path configuration differ. Outside
-that single exclusion, the mirror intentionally includes all content the
-authenticated account can read, not only recognized scientific filename
-suffixes. Plan storage and Git review accordingly: readable shell files,
-configuration, scripts, tools, histories, and monitoring artifacts may appear
-in the servers repository.
+transfer algorithm: connect, select the configured remote root and
+logical-user destination, and run one suffix-filtered `lftp mirror`. The
+command includes `.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`,
+`.S61`, and exactly three-digit suffixes from `.000` through `.999`, while
+excluding directories named exactly `backups`. Only connection and path
+configuration differ.
 
 Install any other missing system commands through the Frisius administrator or
 its supported operating-system package manager. The repository itself has no
@@ -232,12 +230,12 @@ minutes, including when no new files exist. That delay is expected. A
 `servercopy` heartbeat during this phase means only that the `lftp` child is
 still alive.
 
-Whole-tree scope does not override remote permissions. A listed path may still
-fail with `mirror: Access failed: Permission denied`; it then remains absent
-locally and may cause `lftp` and the monitored workflow to return nonzero.
-Investigate repeated or important access errors with the remote server owner.
-Do not change remote permissions from `servercopy` or add local file-selection
-exceptions merely to hide the error.
+Suffix selection does not override remote permissions. An eligible path may
+still fail with `mirror: Access failed: Permission denied`; it then remains
+absent locally and may cause `lftp` and the monitored workflow to return
+nonzero. Investigate repeated or important access errors with the remote server
+owner. Do not change remote permissions from `servercopy` or add
+source-specific exceptions merely to hide the error.
 
 ## Install the production crontab
 
