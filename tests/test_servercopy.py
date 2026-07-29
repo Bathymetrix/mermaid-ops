@@ -65,13 +65,13 @@ class MirrorScriptTests(unittest.TestCase):
                 )
                 lines = script.splitlines()
 
-                self.assertEqual(lines.count("mirror"), 1)
+                self.assertEqual(lines.count("mirror --verbose"), 1)
                 self.assertEqual(
                     lines[-4:],
                     [
                         f'cd "{source.remote_root}"',
                         f'lcd "{destination}"',
-                        "mirror",
+                        "mirror --verbose",
                         "bye",
                     ],
                 )
@@ -98,7 +98,10 @@ class MirrorScriptTests(unittest.TestCase):
                 ]
             )
 
-        self.assertEqual(command_shapes, [["cd", "lcd", "mirror", "bye"]] * 3)
+        self.assertEqual(
+            command_shapes,
+            [["cd", "lcd", "mirror --verbose", "bye"]] * 3,
+        )
 
     def test_ftps_uses_only_validated_tls_settings(self) -> None:
         script = servercopy.build_lftp_script(
@@ -142,7 +145,7 @@ class MirrorScriptTests(unittest.TestCase):
         )
         mirrors = [line for line in script.splitlines() if line.startswith("mirror")]
 
-        self.assertEqual(mirrors, ['mirror "--dry-run"'])
+        self.assertEqual(mirrors, ["mirror --dry-run --verbose"])
         for fragment in self.forbidden_fragments:
             self.assertNotIn(fragment, script)
 
@@ -430,7 +433,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(run_lftp.call_count, 3)
         for source, invocation in zip(sources, run_lftp.call_args_list, strict=True):
             script = invocation.args[1]
-            self.assertEqual(script.count('mirror "--dry-run"'), 1)
+            self.assertEqual(script.count("mirror --dry-run --verbose"), 1)
             self.assertIn(f'cd "{source.remote_root}"', script)
             lcd_line = next(
                 line for line in script.splitlines() if line.startswith("lcd ")
@@ -459,7 +462,7 @@ class WorkflowTests(unittest.TestCase):
             any_order=True,
         )
 
-    def test_normal_run_uses_one_plain_mirror_and_records_real_version(self) -> None:
+    def test_normal_run_uses_one_whole_tree_mirror_and_records_version(self) -> None:
         source = ftps_source()
         report = MagicMock()
         with TemporaryDirectory() as directory:
@@ -491,7 +494,7 @@ class WorkflowTests(unittest.TestCase):
             script = run_lftp.call_args.args[1]
             self.assertEqual(
                 [line for line in script.splitlines() if line.startswith("mirror")],
-                ["mirror"],
+                ["mirror --verbose"],
             )
             self.assertTrue((output / source.user).is_dir())
             self.assertEqual(
