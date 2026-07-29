@@ -27,7 +27,7 @@ if sys.version_info < MIN_VERSION:
         f"(found {sys.version_info.major}.{sys.version_info.minor})."
     )
 
-SERVERCOPY_VERSION = "2.1.0"
+SERVERCOPY_VERSION = "2.2.0"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
@@ -127,8 +127,12 @@ def build_lftp_script(
     lines.append(f"cd {quote(source.remote_root)}")
     lines.append(f"lcd {quote(str(destination))}")
     mirror_options = [
-        '--exclude="(^|/)backups/$"',
+        "--no-recursion",
         *(f"--include-glob={pattern}" for pattern in MIRROR_INCLUDE_GLOBS),
+        "--continue",
+        "--overwrite",
+        "--no-perms",
+        "--parallel=4",
         *(["--dry-run"] if preview else []),
         "--verbose",
     ]
@@ -139,8 +143,8 @@ def build_lftp_script(
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Mirror allowed file suffixes from configured remote trees, "
-            "excluding directories named 'backups'."
+            "Mirror allowed file suffixes directly from configured remote roots "
+            "without recursing into subdirectories."
         )
     )
     modes = parser.add_mutually_exclusive_group()

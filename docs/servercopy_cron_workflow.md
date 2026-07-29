@@ -246,9 +246,10 @@ interpreter therefore remains authoritative for both programs.
 For each configured source, `servercopy` runs one `lftp mirror` after selecting
 that source's configured remote root and local destination. The single mirror
 command includes `.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`,
-`.S61`, and exactly three-digit suffixes from `.000` through `.999`, while
-excluding directories named exactly `backups`. RUDICS SFTP, ESO FTPS, and Kobe
-FTPS differ only in connection and path configuration.
+`.S61`, and exactly three-digit suffixes from `.000` through `.999`. It does
+not recurse, so only matching files located directly in the configured remote
+root are eligible and no subdirectories are traversed. RUDICS SFTP, ESO FTPS,
+and Kobe FTPS differ only in connection and path configuration.
 
 An eligible path can still be unreadable because of server-side ownership or
 permissions. Such a path remains absent locally. If the access failure makes
@@ -311,7 +312,7 @@ If the index is still empty, it prints a concise no-changes message, sends the
 success ping, and exits zero. Otherwise it creates a commit such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.1.0 servercopy_cron=2.4.2]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.0 servercopy_cron=2.4.2]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
@@ -437,7 +438,7 @@ source-specific exclusions merely to hide the failure.
 Correct the remote permission, network, or credential problem when appropriate,
 inspect and commit any valid downloaded files as described above, and rerun
 manually. A nonzero `lftp` status remains a failed run even when most of the
-eligible files outside `backups/` were mirrored successfully.
+eligible top-level files were mirrored successfully.
 
 ### Git failure
 

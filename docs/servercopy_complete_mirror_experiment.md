@@ -6,7 +6,7 @@ This document records the superseded whole-tree experiment and its production
 evidence. Current `servercopy` behavior uses one suffix-filtered `lftp mirror`
 per configured source. The command includes `.MER`, `.LOG`, `.BIN`, `.cmd`,
 `.out`, `.vit`, `.S41`, `.S61`, and exactly three-digit suffixes from `.000`
-through `.999`, and excludes directories named exactly `backups`.
+through `.999`. It does not recurse into remote subdirectories.
 
 The current implementation expresses the numbered family directly as
 `*.[0-9][0-9][0-9]`. It performs no preliminary remote listing, suffix
@@ -31,7 +31,8 @@ branches.
 FTPS still uses the three TLS settings validated on the production-style
 Frisius environment. SFTP still uses its direct connection URL without
 optional modern settings. Both protocols use one mirror command. Normal
-operation does not request deletion, reverse mirroring, or forced overwrites.
+operation uses `--continue`, `--overwrite`, `--no-perms`, and four parallel
+transfers; it does not request deletion or reverse mirroring.
 
 The whole-tree model applied to every configured source. It replaced fixed
 suffix allowlists, numbered-suffix discovery, generated file selections, and
@@ -41,8 +42,8 @@ not restricted to `.MER`, `.LOG`, `.BIN`, `.cmd`, `.out`, `.vit`, `.S41`,
 
 That broader local scope was deliberate during the experiment. Any readable
 content beneath the configured remote root could appear in the mirror. Current
-runs select only the documented suffix allowlist and continue to exclude any
-directory named exactly `backups`, at any depth, from traversal.
+runs select only matching files located directly in the configured remote root
+and do not traverse any subdirectory.
 
 ## Remote permissions and completeness
 

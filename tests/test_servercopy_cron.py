@@ -25,7 +25,7 @@ sys.modules[LOADER.name] = servercopy_cron
 LOADER.exec_module(servercopy_cron)
 
 CHECK_UUID = "11111111-2222-3333-4444-555555555555"
-SERVERCOPY_VERSION = "2.1.0"
+SERVERCOPY_VERSION = "2.2.0"
 
 
 def git_result(
@@ -1098,7 +1098,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=2.1.0 servercopy_cron=2.4.2]",
+                "[servercopy=2.2.0 servercopy_cron=2.4.2]",
                 "failure",
             ],
         )
@@ -1241,7 +1241,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=2.1.0 servercopy_cron=2.4.2]",
+                "[servercopy=2.2.0 servercopy_cron=2.4.2]",
                 "success",
             ],
         )
@@ -1302,7 +1302,7 @@ class WorkflowTests(unittest.TestCase):
                 "commit",
                 "-m",
                 "servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=2.1.0 servercopy_cron=2.4.2]",
+                "[servercopy=2.2.0 servercopy_cron=2.4.2]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)

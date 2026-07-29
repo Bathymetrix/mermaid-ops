@@ -135,20 +135,23 @@ mirror
 The implementation runs one suffix-filtered `lftp mirror` per configured
 source. That single command includes files ending in `.MER`, `.LOG`, `.BIN`,
 `.cmd`, `.out`, `.vit`, `.S41`, `.S61`, or exactly three decimal digits from
-`.000` through `.999`. It excludes directories named exactly `backups`.
-Numbered suffixes are matched directly with `*.[0-9][0-9][0-9]`; no preliminary
-remote listing or suffix discovery is performed.
+`.000` through `.999`. Mirroring is non-recursive: only matching files located
+directly in the configured remote root are eligible, and no remote
+subdirectories are traversed. Numbered suffixes are matched directly with
+`*.[0-9][0-9][0-9]`; no preliminary remote listing or suffix discovery is
+performed.
 
 Protocol, host, credentials, remote root, and local destination are
 configuration; the mirror construction does not vary for RUDICS SFTP accounts,
-ESO explicit-FTPS, Kobe explicit-FTPS, or other endpoints. The mirror does not
-delete remote or local files, reverse the transfer, or force overwrites.
+ESO explicit-FTPS, Kobe explicit-FTPS, or other endpoints. The mirror uses
+`--continue`, `--overwrite`, `--no-perms`, and four parallel transfers. It does
+not delete remote or local files or reverse the transfer.
 
 The implementation deliberately uses the smallest practical subset of `lftp`
 features validated on the production environments, including legacy `lftp
-4.4.8` on Frisius. A full remote listing and comparison can take approximately
-ten minutes even when no files need transfer. This quiet interval is expected,
-not evidence that the process has hung.
+4.4.8` on Frisius. A remote-root listing and comparison can be quiet even when
+no files need transfer. This interval is expected, not evidence that the
+process has hung.
 
 Native `lftp` progress may update one terminal line with carriage returns.
 While `lftp` remains active, `servercopy` emits a periodic heartbeat. The
@@ -220,7 +223,8 @@ operational version increment.
 - Review source and destination mappings before a first normal run.
 - Treat `--dry-run` as an authenticated remote operation.
 - Normal runs may modify files beneath `<output>/<logical_user>/`.
-- Only files matching the documented suffix allowlist are selected.
+- Only top-level files matching the documented suffix allowlist are selected.
+- Remote subdirectories are not traversed.
 - Remote deletions do not delete local files.
 - `servercopy` never changes remote ownership or permissions.
 - Do not expose credentials or the Healthchecks.io UUID.
