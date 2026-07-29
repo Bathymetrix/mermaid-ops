@@ -10,7 +10,7 @@ The repository owns two directly executable, standard-library-only Python
   directories, records run-ledger rows, and writes synchronization transcripts.
 - `servercopy_cron` wraps a scheduled synchronization with invocation logging,
   single-host locking, Healthchecks.io lifecycle pings, a clean-repository
-  preflight, and a conservative Git commit. It never pushes.
+  preflight, and Git preservation of completed downloads. It never pushes.
 
 Remote deletions do not remove local mirror files. Neither program performs
 normalization, conversion, catalog generation, exports, or other downstream
@@ -229,5 +229,8 @@ operational version increment.
 - `servercopy` never changes remote ownership or permissions.
 - Do not expose credentials or the Healthchecks.io UUID.
 - Do not run `servercopy` manually while the scheduled wrapper may be active.
-- `servercopy_cron` commits only after successful synchronization and never
-  pushes.
+- `servercopy_cron` requires a clean servers repository at startup, commits
+  resulting downloads after every completed synchronization invocation
+  (including partially failed runs), and never pushes. A synchronization
+  failure remains an overall wrapper failure even when its partial results are
+  committed successfully.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and monitor servercopy for cron, committing only successful runs."""
+"""Run and monitor servercopy for cron, preserving completed downloads in Git."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ if sys.version_info < MIN_VERSION:
     )
 
 
-SERVERCOPY_CRON_VERSION = "2.4.2"
+SERVERCOPY_CRON_VERSION = "2.5.0"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
 FAILURE_EXCERPT_CHARACTERS = 2_000
@@ -379,8 +379,8 @@ def preflight_servers_repository(servers_repository: Path) -> str | None:
 
     if status.stdout:
         print(
-            "Error: servercopy_cron requires a completely clean servers Git "
-            "repository before synchronization.",
+            "Error: servercopy_cron rejected the run because it requires a "
+            "completely clean servers Git repository at startup.",
             file=sys.stderr,
         )
         print("Git status:", file=sys.stderr)
@@ -390,7 +390,7 @@ def preflight_servers_repository(servers_repository: Path) -> str | None:
             "before retrying.",
             file=sys.stderr,
         )
-        return "servers repository is not clean."
+        return "servers repository was not clean at startup."
 
     return None
 
@@ -398,8 +398,9 @@ def preflight_servers_repository(servers_repository: Path) -> str | None:
 def commit_synced_changes(
     servers_repository: Path,
     servercopy_version: str,
+    servercopy_status: int,
 ) -> int:
-    """Stage and commit after a successful servercopy run."""
+    """Stage and commit changes after a completed servercopy invocation."""
 
     try:
         worktree = run_git(servers_repository, "rev-parse", "--show-toplevel")
@@ -446,7 +447,7 @@ def commit_synced_changes(
             servers_repository, "diff", "--cached", "--quiet", "--exit-code"
         )
         if updated_index.returncode == 0:
-            print("servercopy completed successfully; no changes to commit.")
+            print("servercopy completed; no changes to commit.")
             return 0
         if updated_index.returncode != 1:
             report_git_failure(
@@ -456,8 +457,9 @@ def commit_synced_changes(
             )
             return 1
 
+        commit_kind = "cron" if servercopy_status == 0 else "cron partial"
         message = (
-            f"servercopy [cron]: {utc_now()} "
+            f"servercopy [{commit_kind}]: {utc_now()} "
             f"[servercopy={servercopy_version} "
             f"servercopy_cron={SERVERCOPY_CRON_VERSION}]"
         )
@@ -472,7 +474,10 @@ def commit_synced_changes(
         print(f"Error: could not run Git: {error}", file=sys.stderr)
         return 1
 
-    print(f"Committed synchronized server changes: {message}")
+    if servercopy_status == 0:
+        print(f"Committed synchronized server changes: {message}")
+    else:
+        print(f"Committed partial server changes: {message}")
     return 0
 
 
@@ -515,25 +520,34 @@ def run_cron_workflow(
     print(f"servercopy version: {servercopy_version}")
 
     servercopy_status = run_servercopy(servercopy_command, servers_repository)
+    failure_reasons: list[str] = []
     if servercopy_status != 0:
         print(
             f"Error: servercopy failed (exit status {servercopy_status}).",
             file=sys.stderr,
         )
-        return finish_failed_run(
-            check_uuid,
-            servercopy_status,
-            f"servercopy failed (exit status {servercopy_status}).",
-            log_path,
-            transcript,
+        failure_reasons.append(
+            f"servercopy failed (exit status {servercopy_status})."
         )
 
-    git_status = commit_synced_changes(servers_repository, servercopy_version)
+    git_status = commit_synced_changes(
+        servers_repository,
+        servercopy_version,
+        servercopy_status,
+    )
     if git_status != 0:
+        failure_reasons.append(
+            f"Git post-sync workflow failed (exit status {git_status})."
+        )
+
+    if failure_reasons:
+        overall_status = (
+            servercopy_status if servercopy_status != 0 else git_status
+        )
         return finish_failed_run(
             check_uuid,
-            git_status,
-            f"Git post-sync workflow failed (exit status {git_status}).",
+            overall_status,
+            " ".join(failure_reasons),
             log_path,
             transcript,
         )

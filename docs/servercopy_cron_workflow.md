@@ -44,20 +44,20 @@ run servercopy
         |
         v
 did synchronization succeed?
-    no  --> send /fail
-            perform no Git operations
-            exit with the synchronization failure status
-    yes --> continue
+    no  --> record the synchronization failure and continue
+    yes --> record synchronization success and continue
         |
         v
 validate and perform the conservative Git workflow
         |
         v
-did the complete workflow succeed?
-    no  --> send /fail
+did Git processing succeed?
+    no  --> report the Git failure and any synchronization failure
+            send /fail
             exit nonzero
-    yes --> send success
-            exit zero
+    yes --> did synchronization succeed?
+                no  --> send /fail and exit with the synchronization status
+                yes --> send success and exit zero
 ```
 
 The wrapper requires a nonempty `MERMAID` environment variable. It derives all
@@ -258,16 +258,17 @@ even if other files transferred.
 
 If `servercopy` returns nonzero, the wrapper:
 
-- attempts one Healthchecks.io failure ping;
-- runs no Git command, including read-only Git inspection;
-- leaves partial downloads in the working tree without staging, reverting, or
-  deleting them; and
-- returns the original nonzero synchronization status, even if the failure ping
-  also fails.
+- records the synchronization failure;
+- waits for the completed invocation, then runs the normal Git workflow;
+- commits any completed downloads using a partial-run commit message;
+- attempts one Healthchecks.io failure ping; and
+- returns the original nonzero synchronization status when Git processing
+  succeeds, even if the failure ping also fails.
 
-The next scheduled cron invocation runs normally. A later successful
-synchronization can finish the partial downloads and commit the resulting
-state.
+If the failed synchronization produced no repository changes, the Git workflow
+creates no empty commit. A successful partial-data commit preserves completed
+downloads but does not convert the synchronization or overall wrapper result
+to success.
 
 The wrapper follows `servercopy`'s existing exit-status contract; it does not
 parse or reinterpret synchronization output. In particular, `servercopy`
@@ -295,9 +296,9 @@ staging files, or creating a commit.
 Failure to inspect the repository follows the same monitored failure path and
 includes captured Git stderr when available.
 
-After `servercopy` returns zero, the wrapper again verifies that
-`$MERMAID/servers` is the exact root of a Git working tree. It then checks the
-entire index before staging anything.
+After every completed `servercopy` invocation, regardless of its exit status,
+the wrapper again verifies that `$MERMAID/servers` is the exact root of a Git
+working tree. It then checks the entire index before staging anything.
 
 If the index already contains staged changes, the wrapper refuses to run
 `git add` or `git commit`, sends the failure ping, and exits nonzero. This
@@ -308,17 +309,26 @@ With a clean index, the wrapper runs:
 
 `git add -A` with `$MERMAID/servers` as its working directory.
 
-If the index is still empty, it prints a concise no-changes message, sends the
-success ping, and exits zero. Otherwise it creates a commit such as:
+If the index is still empty, it prints a concise no-changes message and creates
+no empty commit. Otherwise a successful synchronization creates a commit such
+as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.1 servercopy_cron=2.4.2]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.1 servercopy_cron=2.5.0]
+```
+
+A failed synchronization that produced changes instead creates:
+
+```text
+servercopy [cron partial]: 2026-07-23T22:30:00Z [servercopy=2.2.1 servercopy_cron=2.5.0]
 ```
 
 The timestamp is timezone-aware UTC, and the two version fields identify the
 independently versioned synchronization engine and cron wrapper used for the
-run. Only after the commit succeeds does the wrapper send the success ping and
-exit zero. The wrapper never pushes.
+run. After Git processing, the wrapper determines the overall outcome
+independently: synchronization and Git must both succeed before it sends the
+success ping and exits zero. A synchronization or Git failure sends `/fail`;
+when both fail, both are reported. The wrapper never pushes.
 
 A Git worktree check, index inspection, staging, or commit failure is reported
 to stderr, followed by an attempted failure ping and a nonzero exit. The wrapper
@@ -365,10 +375,12 @@ schedule, Grace Time, or Integrations.
 - Start-ping failure: nonzero, with no synchronization or Git action.
 - `servercopy --version` execution failure or malformed output: nonzero after
   one failure-ping attempt, with no synchronization or Git action.
-- Synchronization failure: the original nonzero `servercopy` status after one
-  failure-ping attempt, with no Git command.
+- Synchronization failure with successful Git processing: the original nonzero
+  `servercopy` status after committing any partial changes (or reporting no
+  changes) and attempting one failure ping.
 - Git validation, inspection, staging, or commit failure: nonzero after one
-  failure-ping attempt and with no automatic recovery.
+  failure-ping attempt and with no automatic recovery; any simultaneous
+  synchronization failure is also reported.
 - Successful synchronization with no changes: zero after the success ping.
 - Successful synchronization and commit: zero after the success ping.
 - Success-ping failure after otherwise successful work: nonzero, with completed
@@ -390,10 +402,10 @@ git -C /home/jdsimon/mermaid/servers status
 git -C /home/jdsimon/mermaid/servers diff
 ```
 
-An interrupted or failed synchronization may leave legitimate downloaded files
-uncommitted. Inspect those files and commit valid synchronization results before
-rerunning the wrapper. Do not delete or stash legitimate downloads merely to
-satisfy the clean-repository preflight.
+An interrupted synchronization, or a Git failure after synchronization, may
+leave legitimate downloaded files uncommitted. Inspect those files and commit
+valid synchronization results before rerunning the wrapper. Do not delete or
+stash legitimate downloads merely to satisfy the clean-repository preflight.
 
 If files are invalid or unrelated to synchronization, resolve them deliberately
 according to their provenance. The wrapper performs no automatic reset,
@@ -420,8 +432,9 @@ commit may already exist.
 ### Remote synchronization failure
 
 Use the timestamped workflow log and the nested `servercopy` diagnostics to
-identify the logical user and failing stage. Partial downloads remain
-uncommitted.
+identify the logical user and failing stage. If Git processing succeeded, any
+partial downloads were preserved in a `[cron partial]` commit even though the
+wrapper still reported failure.
 
 A diagnostic such as:
 
@@ -436,9 +449,9 @@ repeated or operationally important cases with the server owner; do not add
 source-specific exclusions merely to hide the failure.
 
 Correct the remote permission, network, or credential problem when appropriate,
-inspect and commit any valid downloaded files as described above, and rerun
-manually. A nonzero `lftp` status remains a failed run even when most of the
-eligible top-level files were mirrored successfully.
+inspect the partial commit (or recover from any reported Git failure), and
+rerun manually. A nonzero `lftp` status remains a failed run even when most of
+the eligible top-level files were mirrored and committed successfully.
 
 ### Git failure
 

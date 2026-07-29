@@ -728,6 +728,7 @@ class WorkflowTests(unittest.TestCase):
             status = servercopy_cron.commit_synced_changes(
                 servers,
                 SERVERCOPY_VERSION,
+                0,
             )
 
         self.assertNotEqual(status, 0)
@@ -822,53 +823,146 @@ class WorkflowTests(unittest.TestCase):
         run_git.assert_not_called()
         ping_success.assert_not_called()
 
-    def test_failed_servercopy_sends_failure_and_performs_no_git_commands(
+    def test_failed_servercopy_with_no_changes_processes_git_and_sends_failure(
         self,
     ) -> None:
-        lifecycle = Mock()
-        start = Mock()
-        get_version = Mock(return_value=SERVERCOPY_VERSION)
-        run_servercopy = Mock(return_value=17)
-        failure = Mock()
-        lifecycle.attach_mock(start, "start")
-        lifecycle.attach_mock(get_version, "version")
-        lifecycle.attach_mock(run_servercopy, "servercopy")
-        lifecycle.attach_mock(failure, "failure")
+        servers = Path("/mermaid/servers")
+        responses = iter(
+            [
+                git_result(0, f"{servers}\n"),
+                git_result(0),
+                git_result(0),
+                git_result(0),
+            ]
+        )
+        events: list[str] = []
+        output = StringIO()
+
+        def record_git(repository: Path, *arguments: str) -> object:
+            events.append(f"git {' '.join(arguments)}")
+            return next(responses)
 
         with (
-            patch.object(servercopy_cron, "ping_start", start),
+            patch.object(
+                servercopy_cron,
+                "ping_start",
+                side_effect=lambda uuid: events.append("start"),
+            ),
             patch.object(
                 servercopy_cron,
                 "get_servercopy_version",
-                get_version,
+                side_effect=lambda command: events.append("version")
+                or SERVERCOPY_VERSION,
             ),
-            patch.object(servercopy_cron, "run_servercopy", run_servercopy),
-            patch.object(servercopy_cron, "ping_failure", failure),
-            patch.object(servercopy_cron, "run_git") as run_git,
+            patch.object(
+                servercopy_cron,
+                "run_servercopy",
+                side_effect=lambda command, repository: events.append(
+                    "servercopy"
+                )
+                or 17,
+            ),
+            patch.object(servercopy_cron, "run_git", side_effect=record_git),
+            patch.object(
+                servercopy_cron,
+                "ping_failure",
+                side_effect=lambda uuid, message: events.append("failure"),
+            ) as ping_failure,
             patch.object(servercopy_cron, "ping_success") as ping_success,
-            redirect_stdout(StringIO()),
+            redirect_stdout(output),
             redirect_stderr(StringIO()),
         ):
             status = servercopy_cron.run_cron_workflow(
                 Path("/repo/servercopy"),
-                Path("/mermaid/servers"),
+                servers,
                 CHECK_UUID,
             )
 
         self.assertEqual(status, 17)
         self.assertEqual(
-            lifecycle.mock_calls,
+            events,
             [
-                call.start(CHECK_UUID),
-                call.version(Path("/repo/servercopy")),
-                call.servercopy(
-                    Path("/repo/servercopy"),
-                    Path("/mermaid/servers"),
-                ),
-                call.failure(CHECK_UUID, ANY),
+                "start",
+                "version",
+                "servercopy",
+                "git rev-parse --show-toplevel",
+                "git diff --cached --quiet --exit-code",
+                "git add -A",
+                "git diff --cached --quiet --exit-code",
+                "failure",
             ],
         )
-        run_git.assert_not_called()
+        self.assertIn("no changes to commit", output.getvalue())
+        self.assertIn(
+            "servercopy failed (exit status 17)",
+            ping_failure.call_args.args[1],
+        )
+        ping_success.assert_not_called()
+
+    def test_failed_servercopy_with_changes_creates_partial_commit_and_fails(
+        self,
+    ) -> None:
+        servers = Path("/mermaid/servers")
+        responses = iter(
+            [
+                git_result(0, f"{servers}\n"),
+                git_result(0),
+                git_result(0),
+                git_result(1),
+                git_result(0),
+            ]
+        )
+        events: list[str] = []
+        output = StringIO()
+
+        def record_git(repository: Path, *arguments: str) -> object:
+            events.append(f"git {' '.join(arguments)}")
+            return next(responses)
+
+        with (
+            patch.object(servercopy_cron, "ping_start"),
+            patch.object(
+                servercopy_cron,
+                "get_servercopy_version",
+                return_value=SERVERCOPY_VERSION,
+            ),
+            patch.object(servercopy_cron, "run_servercopy", return_value=17),
+            patch.object(servercopy_cron, "run_git", side_effect=record_git),
+            patch.object(
+                servercopy_cron,
+                "utc_now",
+                return_value="2026-07-23T22:30:00Z",
+            ),
+            patch.object(
+                servercopy_cron,
+                "ping_failure",
+                side_effect=lambda uuid, message: events.append("failure"),
+            ) as ping_failure,
+            patch.object(servercopy_cron, "ping_success") as ping_success,
+            redirect_stdout(output),
+            redirect_stderr(StringIO()),
+        ):
+            status = servercopy_cron.run_cron_workflow(
+                Path("/repo/servercopy"),
+                servers,
+                CHECK_UUID,
+            )
+
+        self.assertEqual(status, 17)
+        self.assertEqual(
+            events[-2:],
+            [
+                "git commit -m servercopy [cron partial]: "
+                "2026-07-23T22:30:00Z "
+                "[servercopy=2.2.1 servercopy_cron=2.5.0]",
+                "failure",
+            ],
+        )
+        self.assertIn("Committed partial server changes", output.getvalue())
+        self.assertIn(
+            "servercopy failed (exit status 17)",
+            ping_failure.call_args.args[1],
+        )
         ping_success.assert_not_called()
 
     def test_failure_ping_failure_preserves_servercopy_status(self) -> None:
@@ -884,10 +978,14 @@ class WorkflowTests(unittest.TestCase):
             patch.object(servercopy_cron, "run_servercopy", return_value=17),
             patch.object(
                 servercopy_cron,
+                "commit_synced_changes",
+                return_value=0,
+            ) as commit_changes,
+            patch.object(
+                servercopy_cron,
                 "ping_failure",
                 side_effect=servercopy_cron.HealthchecksPingError,
             ) as ping_failure,
-            patch.object(servercopy_cron, "run_git") as run_git,
             redirect_stdout(StringIO()),
             redirect_stderr(error_output),
         ):
@@ -901,7 +999,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("failure ping also failed", error_output.getvalue())
         self.assertNotIn(CHECK_UUID, error_output.getvalue())
         ping_failure.assert_called_once_with(CHECK_UUID, ANY)
-        run_git.assert_not_called()
+        commit_changes.assert_called_once_with(
+            Path("/mermaid/servers"),
+            SERVERCOPY_VERSION,
+            17,
+        )
 
     def test_preexisting_staged_changes_send_failure_before_git_add(self) -> None:
         with TemporaryDirectory() as directory:
@@ -1046,6 +1148,50 @@ class WorkflowTests(unittest.TestCase):
         ping_failure.assert_called_once_with(CHECK_UUID, ANY)
         ping_success.assert_not_called()
 
+    def test_sync_and_git_failures_are_both_reported(self) -> None:
+        with TemporaryDirectory() as directory:
+            servers = Path(directory) / "servers"
+            responses = [
+                git_result(0, f"{servers}\n"),
+                git_result(0),
+                git_result(5, stderr="synthetic staging failure"),
+            ]
+            error_output = StringIO()
+
+            with (
+                patch.object(servercopy_cron, "ping_start"),
+                patch.object(
+                    servercopy_cron,
+                    "get_servercopy_version",
+                    return_value=SERVERCOPY_VERSION,
+                ),
+                patch.object(servercopy_cron, "run_servercopy", return_value=17),
+                patch.object(servercopy_cron, "run_git", side_effect=responses),
+                patch.object(servercopy_cron, "ping_failure") as ping_failure,
+                patch.object(servercopy_cron, "ping_success") as ping_success,
+                redirect_stdout(StringIO()),
+                redirect_stderr(error_output),
+            ):
+                status = servercopy_cron.run_cron_workflow(
+                    Path("/repo/servercopy"),
+                    servers,
+                    CHECK_UUID,
+                )
+
+        self.assertEqual(status, 17)
+        self.assertIn(
+            "servercopy failed (exit status 17)",
+            error_output.getvalue(),
+        )
+        self.assertIn("git add failed (exit status 5)", error_output.getvalue())
+        failure_message = ping_failure.call_args.args[1]
+        self.assertIn("servercopy failed (exit status 17)", failure_message)
+        self.assertIn(
+            "Git post-sync workflow failed (exit status 1)",
+            failure_message,
+        )
+        ping_success.assert_not_called()
+
     def test_git_commit_failure_sends_failure(self) -> None:
         with TemporaryDirectory() as directory:
             servers = Path(directory) / "servers"
@@ -1098,7 +1244,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=2.2.1 servercopy_cron=2.4.2]",
+                "[servercopy=2.2.1 servercopy_cron=2.5.0]",
                 "failure",
             ],
         )
@@ -1241,7 +1387,7 @@ class WorkflowTests(unittest.TestCase):
             events[-2:],
             [
                 "git commit -m servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=2.2.1 servercopy_cron=2.4.2]",
+                "[servercopy=2.2.1 servercopy_cron=2.5.0]",
                 "success",
             ],
         )
@@ -1302,7 +1448,7 @@ class WorkflowTests(unittest.TestCase):
                 "commit",
                 "-m",
                 "servercopy [cron]: 2026-07-23T22:30:00Z "
-                "[servercopy=2.2.1 servercopy_cron=2.4.2]",
+                "[servercopy=2.2.1 servercopy_cron=2.5.0]",
             ),
         )
         ping_success.assert_called_once_with(CHECK_UUID)
@@ -1396,6 +1542,11 @@ class LoggingTests(unittest.TestCase):
                 ),
                 patch.object(
                     servercopy_cron,
+                    "commit_synced_changes",
+                    return_value=0,
+                ) as commit_changes,
+                patch.object(
+                    servercopy_cron,
                     "ping_failure",
                     side_effect=servercopy_cron.HealthchecksPingError,
                 ) as ping_failure,
@@ -1417,6 +1568,11 @@ class LoggingTests(unittest.TestCase):
         self.assertIn("servercopy failed (exit status 17)", transcript)
         self.assertIn("failure ping also failed", transcript)
         self.assertIn("servercopy_cron exit status: 17", transcript)
+        commit_changes.assert_called_once_with(
+            Path(directory) / "servers",
+            SERVERCOPY_VERSION,
+            17,
+        )
         ping_failure.assert_called_once()
         self.assertIn("servercopy failed", ping_failure.call_args.args[1])
         self.assertIn(str(log_path), ping_failure.call_args.args[1])
@@ -1460,7 +1616,11 @@ class LoggingTests(unittest.TestCase):
         self.assertIn("servercopy_cron exit status: 1", transcript)
 
     def test_git_failure_is_logged_and_reported(self) -> None:
-        def fail_git(repository: Path, version: str) -> int:
+        def fail_git(
+            repository: Path,
+            version: str,
+            servercopy_status: int,
+        ) -> int:
             print("Error: git commit failed (exit status 7).", file=sys.stderr)
             print("Git reported: synthetic commit failure", file=sys.stderr)
             return 1
@@ -1552,7 +1712,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.4.2\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.5.0\n")
                 load_uuid.assert_not_called()
                 logged_workflow.assert_not_called()
                 flock.assert_not_called()
@@ -1893,7 +2053,7 @@ class MainTests(unittest.TestCase):
             transcript_text = logs[0].read_text(encoding="utf-8")
             for expected in (
                 "servercopy_cron started: 2026-07-27T19:56:50Z",
-                "servercopy_cron version: 2.4.2",
+                "servercopy_cron version: 2.5.0",
                 "invocation: operator@host.example.org",
                 "system: TestOS-1.0",
                 f"MERMAID: {mermaid_root}",
