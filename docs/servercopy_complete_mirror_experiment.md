@@ -31,8 +31,8 @@ branches.
 FTPS still uses the three TLS settings validated on the production-style
 Frisius environment. SFTP still uses its direct connection URL without
 optional modern settings. Both protocols use one mirror command. Normal
-operation uses `--continue`, `--overwrite`, `--no-perms`, and four parallel
-transfers; it does not request deletion or reverse mirroring.
+operation uses `--continue`, `--no-perms`, and four parallel transfers; it does
+not request deletion or reverse mirroring.
 
 The whole-tree model applied to every configured source. It replaced fixed
 suffix allowlists, numbered-suffix discovery, generated file selections, and

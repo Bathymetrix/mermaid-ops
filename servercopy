@@ -27,7 +27,7 @@ if sys.version_info < MIN_VERSION:
         f"(found {sys.version_info.major}.{sys.version_info.minor})."
     )
 
-SERVERCOPY_VERSION = "2.2.0"
+SERVERCOPY_VERSION = "2.2.1"
 SOURCE_FIELDS = ("user", "login", "protocol", "host", "port", "remote_root")
 LEDGER_HEADER = "user,result,start,end,ver"
 CREDENTIAL_URL = re.compile(r"((?:sftp|ftp(?:\+tls)?)://)[^/\s]+@")
@@ -130,7 +130,7 @@ def build_lftp_script(
         "--no-recursion",
         *(f"--include-glob={pattern}" for pattern in MIRROR_INCLUDE_GLOBS),
         "--continue",
-        "--overwrite",
+        # lftp 4.4.8 has no --overwrite option; use its default replacement behavior.
         "--no-perms",
         "--parallel=4",
         *(["--dry-run"] if preview else []),

@@ -48,6 +48,7 @@ class MirrorScriptTests(unittest.TestCase):
         "--target-directory",
         "--delete",
         "--exclude",
+        "--overwrite",
         "xfer:timeout",
         "sftp:auto-confirm",
         "cls ",
@@ -78,7 +79,6 @@ class MirrorScriptTests(unittest.TestCase):
         self.assertFalse(any(option.startswith("--exclude") for option in filters))
         for option in (
             "--continue",
-            "--overwrite",
             "--no-perms",
             "--parallel=4",
             "--verbose",
@@ -488,7 +488,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(len(mirrors), 1)
             self.assertIn("--no-recursion", mirrors[0])
             self.assertNotIn("--exclude", mirrors[0])
-            for option in ("--continue", "--overwrite", "--no-perms", "--parallel=4"):
+            for option in ("--continue", "--no-perms", "--parallel=4"):
                 self.assertIn(option, mirrors[0])
             for pattern in servercopy.MIRROR_INCLUDE_GLOBS:
                 self.assertEqual(mirrors[0].count(f"--include-glob={pattern}"), 1)
@@ -566,7 +566,7 @@ class WorkflowTests(unittest.TestCase):
                 ),
                 "user,result,start,end,ver\n"
                 "eso,success,2026-07-28T01:00:00Z,"
-                "2026-07-28T01:10:00Z,2.2.0\n",
+                "2026-07-28T01:10:00Z,2.2.1\n",
             )
 
     def test_missing_credential_skips_source_and_runs_others(self) -> None:

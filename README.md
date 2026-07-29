@@ -144,8 +144,8 @@ performed.
 Protocol, host, credentials, remote root, and local destination are
 configuration; the mirror construction does not vary for RUDICS SFTP accounts,
 ESO explicit-FTPS, Kobe explicit-FTPS, or other endpoints. The mirror uses
-`--continue`, `--overwrite`, `--no-perms`, and four parallel transfers. It does
-not delete remote or local files or reverse the transfer.
+`--continue`, `--no-perms`, and four parallel transfers. It does not delete
+remote or local files or reverse the transfer.
 
 The implementation deliberately uses the smallest practical subset of `lftp`
 features validated on the production environments, including legacy `lftp
