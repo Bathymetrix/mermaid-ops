@@ -333,19 +333,27 @@ and does not push. Otherwise a successful synchronization creates a commit
 such as:
 
 ```text
-servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.6.0]
+servercopy [cron]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.7.0]
+
+America/Los_Angeles: 2026-07-23T15:30:00-07:00
+America/New_York: 2026-07-23T18:30:00-04:00
 ```
 
 A failed synchronization that produced changes instead creates:
 
 ```text
-servercopy [cron partial]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.6.0]
+servercopy [cron partial]: 2026-07-23T22:30:00Z [servercopy=2.2.2 servercopy_cron=2.7.0]
+
+America/Los_Angeles: 2026-07-23T15:30:00-07:00
+America/New_York: 2026-07-23T18:30:00-04:00
 ```
 
-The timestamp is timezone-aware UTC, and the two version fields identify the
-independently versioned synchronization engine and cron wrapper used for the
-run. The `partial` label depends only on the `servercopy` result; a pull failure
-alone does not make a successful synchronization commit partial.
+The first line remains a timezone-aware UTC commit subject. It is followed by
+the same instant in `America/Los_Angeles` and `America/New_York`, including the
+applicable daylight or standard-time UTC offset. The two version fields identify
+the independently versioned synchronization engine and cron wrapper used for
+the run. The `partial` label depends only on the `servercopy` result; a pull
+failure alone does not make a successful synchronization commit partial.
 
 Every newly created commit, including a partial commit or one created after a
 failed pull, triggers exactly one plain `git push` to the configured upstream.
@@ -372,8 +380,10 @@ Non-Git phases instead report `not-applicable`; a no-change Git run reports
 
 ## Production schedule and monitoring
 
-Frisius runs the wrapper at 07:30, 15:30, and 23:30 in the host's local
-timezone. The canonical crontab is maintained in
+Frisius is a Linux host on the Princeton University campus and runs the wrapper
+at 01:00, 09:00, and 17:00 in `America/New_York`. For an operator in
+`America/Los_Angeles`, these runs occur at 22:00 on the previous day, 06:00,
+and 14:00. The canonical crontab is maintained in
 [`frisius_installation.md`](frisius_installation.md); it invokes the wrapper
 with the explicit Miniforge interpreter and appends launcher output to the
 outer cron log.
@@ -385,13 +395,17 @@ replacement for the wrapper's promptly flushed, per-invocation workflow logs.
 Configure the Healthchecks.io Check with the actual cron expression:
 
 ```cron
-30 7,15,23 * * *
+0 1,9,17 * * *
 ```
 
-Set the Check timezone to the same timezone used by the cron host. Set its Grace
-Time longer than the longest legitimate `servercopy_cron` runtime so an active,
-slow synchronization is not mistaken for a hung run. Configure one or more
-Healthchecks.io Integrations if human-facing alerts are desired.
+Set the Check timezone to `America/New_York` and its Grace Time to one hour.
+Healthchecks.io therefore evaluates the same schedule as the production host.
+An incremental full-mirror run currently takes about 15 minutes when little new
+data are available. This is an operational observation, not an upper bound: a
+fresh mirror can take much longer. The one-hour grace period may therefore need
+to be increased when a newly provisioned system begins with a fresh data copy.
+Configure one or more Healthchecks.io Integrations if human-facing alerts are
+desired.
 `servercopy_cron` does not create or manage the Healthchecks.io account, Check,
 schedule, Grace Time, or Integrations.
 

@@ -175,12 +175,15 @@ chmod 600 \
 The file is ignored by Git. Configure the Healthchecks.io Check with:
 
 ```cron
-30 7,15,23 * * *
+0 1,9,17 * * *
 ```
 
-Use the Frisius timezone and a grace period longer than the longest legitimate
-synchronization. Configure human-facing alerts through Healthchecks.io
-Integrations.
+Set the Check timezone to `America/New_York`, matching Frisius, and set its
+Grace Time to one hour. A normal incremental full-mirror run currently takes
+about 15 minutes when little new data are available; a fresh mirror can take
+much longer. Increase the grace period when provisioning a new system if its
+initial run begins with a fresh data copy that can legitimately exceed one
+hour. Configure human-facing alerts through Healthchecks.io Integrations.
 
 ## Verify the installation
 
@@ -246,8 +249,13 @@ SHELL=/bin/bash
 PATH=/usr/bin:/bin
 MERMAID=/home/jdsimon/mermaid
 
-30 7,15,23 * * * /home/jdsimon/miniforge3/envs/python3.12/bin/python3 /home/jdsimon/programs/mermaid-ops/servercopy_cron >> /home/jdsimon/mermaid/logs/servercopy_cron_cron.log 2>&1
+0 1,9,17 * * * /home/jdsimon/miniforge3/envs/python3.12/bin/python3 /home/jdsimon/programs/mermaid-ops/servercopy_cron >> /home/jdsimon/mermaid/logs/servercopy_cron_cron.log 2>&1
 ```
+
+Frisius is a Linux host on the Princeton University campus and uses
+`America/New_York`. The production jobs therefore start at 01:00, 09:00, and
+17:00 Eastern time. For an operator in `America/Los_Angeles`, these correspond
+to 22:00 on the previous day, 06:00, and 14:00 Pacific time.
 
 Cron does not activate Conda. It launches `servercopy_cron` with the explicit
 Miniforge interpreter, and the wrapper uses that same interpreter to launch

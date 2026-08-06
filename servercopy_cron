@@ -22,6 +22,7 @@ from typing import TextIO
 import traceback
 from urllib.request import Request, urlopen
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 MIN_VERSION = (3, 12)
 if sys.version_info < MIN_VERSION:
@@ -32,7 +33,7 @@ if sys.version_info < MIN_VERSION:
     )
 
 
-SERVERCOPY_CRON_VERSION = "2.6.0"
+SERVERCOPY_CRON_VERSION = "2.7.0"
 HEALTHCHECKS_BASE_URL = "https://hc-ping.com"
 HEALTHCHECKS_TIMEOUT_SECONDS = 15
 FAILURE_EXCERPT_CHARACTERS = 2_000
@@ -110,6 +111,14 @@ class RunTranscript:
 
 def utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def local_timestamp(utc_timestamp: str, timezone_name: str) -> str:
+    """Format a UTC timestamp in the named IANA timezone."""
+
+    return datetime.fromisoformat(utc_timestamp).astimezone(
+        ZoneInfo(timezone_name)
+    ).isoformat(timespec="seconds")
 
 
 def utc_log_filename() -> str:
@@ -553,10 +562,15 @@ def commit_synced_changes(
             return PHASE_FAILURE
 
         commit_kind = "cron" if servercopy_status == 0 else "cron partial"
+        timestamp = utc_now()
         message = (
-            f"servercopy [{commit_kind}]: {utc_now()} "
+            f"servercopy [{commit_kind}]: {timestamp} "
             f"[servercopy={servercopy_version} "
-            f"servercopy_cron={SERVERCOPY_CRON_VERSION}]"
+            f"servercopy_cron={SERVERCOPY_CRON_VERSION}]\n\n"
+            "America/Los_Angeles: "
+            f"{local_timestamp(timestamp, 'America/Los_Angeles')}\n"
+            "America/New_York: "
+            f"{local_timestamp(timestamp, 'America/New_York')}"
         )
         committed = run_git(git_root, "commit", "-m", message)
         if committed.returncode != 0:

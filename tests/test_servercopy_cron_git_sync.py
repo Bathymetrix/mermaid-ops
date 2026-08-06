@@ -245,8 +245,26 @@ class GitPhaseCommandTests(unittest.TestCase):
         self.assertEqual(result, servercopy_cron.PHASE_SUCCESS)
         self.assertIn(call(root, "add", "-A"), run_git.call_args_list)
         commit_call = run_git.call_args_list[-1]
-        self.assertIn("servercopy [cron]:", commit_call.args[-1])
-        self.assertNotIn("partial", commit_call.args[-1])
+        self.assertEqual(
+            commit_call.args[-1],
+            "servercopy [cron]: 2026-07-29T12:00:00Z "
+            f"[servercopy={SERVERCOPY_VERSION} "
+            f"servercopy_cron={servercopy_cron.SERVERCOPY_CRON_VERSION}]\n\n"
+            "America/Los_Angeles: 2026-07-29T05:00:00-07:00\n"
+            "America/New_York: 2026-07-29T08:00:00-04:00",
+        )
+
+    def test_local_timestamp_uses_standard_time_offsets(self) -> None:
+        timestamp = "2026-01-15T12:00:00Z"
+
+        self.assertEqual(
+            servercopy_cron.local_timestamp(timestamp, "America/Los_Angeles"),
+            "2026-01-15T04:00:00-08:00",
+        )
+        self.assertEqual(
+            servercopy_cron.local_timestamp(timestamp, "America/New_York"),
+            "2026-01-15T07:00:00-05:00",
+        )
 
     def test_subdirectory_changes_are_staged_only_in_managed_scope(self) -> None:
         root = Path("/repo")

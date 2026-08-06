@@ -679,7 +679,7 @@ class MainTests(unittest.TestCase):
                     servercopy_cron.main([option])
 
                 self.assertEqual(raised.exception.code, 0)
-                self.assertEqual(output.getvalue(), "servercopy_cron 2.6.0\n")
+                self.assertEqual(output.getvalue(), "servercopy_cron 2.7.0\n")
                 load_uuid.assert_not_called()
                 logged_workflow.assert_not_called()
                 flock.assert_not_called()
@@ -1020,7 +1020,7 @@ class MainTests(unittest.TestCase):
             transcript_text = logs[0].read_text(encoding="utf-8")
             for expected in (
                 "servercopy_cron started: 2026-07-27T19:56:50Z",
-                "servercopy_cron version: 2.6.0",
+                "servercopy_cron version: 2.7.0",
                 "invocation: operator@host.example.org",
                 "system: TestOS-1.0",
                 f"MERMAID: {mermaid_root}",
